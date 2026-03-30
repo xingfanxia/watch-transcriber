@@ -90,6 +90,7 @@ Available deliveries:
 | `file` | Save markdown to a folder | `OUTPUT_DIR` |
 | `apple_notes` | Create an Apple Note | `APPLE_NOTES_FOLDER` |
 | `feishu` | Create a Feishu/Lark doc | `FEISHU_FOLDER_TOKEN` or `FEISHU_WIKI_SPACE` |
+| `feishu_notify` | DM summary via Feishu bot | `FEISHU_NOTIFY_USER_ID` |
 | `obsidian_git` | Commit to a GitHub repo | `OBSIDIAN_REPO`, `GITHUB_TOKEN` |
 | `agent` | Delegate to `claude -p` | `AGENT_DELIVERY_PROMPT` |
 

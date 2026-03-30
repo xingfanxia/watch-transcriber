@@ -90,6 +90,7 @@ DELIVERY_TARGETS=file,apple_notes
 | `file` | 保存为 Markdown 文件 | `OUTPUT_DIR` |
 | `apple_notes` | 创建 Apple 备忘录 | `APPLE_NOTES_FOLDER` |
 | `feishu` | 创建飞书文档 | `FEISHU_FOLDER_TOKEN` 或 `FEISHU_WIKI_SPACE` |
+| `feishu_notify` | 飞书 IM 私信通知摘要 | `FEISHU_NOTIFY_USER_ID` |
 | `obsidian_git` | 提交到 GitHub 仓库 | `OBSIDIAN_REPO`, `GITHUB_TOKEN` |
 | `agent` | 委托给 `claude -p` | `AGENT_DELIVERY_PROMPT` |
 
