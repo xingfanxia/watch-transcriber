@@ -173,6 +173,23 @@ watch-transcriber/
 └── state/                     # Processed files tracking (gitignored)
 ```
 
+## Contributing
+
+This project is designed to be **modular and forkable**. Every layer is a simple, swappable component:
+
+| Layer | Current | Want something different? |
+|-------|---------|--------------------------|
+| **Recording** | Apple Voice Memos | Any app that syncs audio files to a known directory |
+| **File monitoring** | macOS `launchd WatchPaths` | `fswatch`, `inotifywait` (Linux), polling, or a cloud trigger |
+| **Transcription** | Gemini 3 Flash (multimodal) | Whisper, Qwen3-ASR, DouBao, AssemblyAI, Deepgram — just replace `transcribe_and_summarize()` |
+| **Delivery** | file, Apple Notes, Feishu, Obsidian, agent | Drop a new `.py` in `deliveries/` with a `deliver(note)` function |
+
+PRs welcome for:
+- **New transcription providers** — Whisper, Qwen3-ASR-Flash, etc.
+- **New delivery targets** — Slack, Notion, WeChat, Telegram, email, etc.
+- **Better file monitoring** — `fswatch`, cross-platform watchers, Linux `inotify` support
+- **Smarter summarization** — custom prompts, topic extraction, meeting note templates
+
 ## License
 
 MIT

@@ -173,6 +173,23 @@ watch-transcriber/
 └── state/                     # 已处理文件记录（gitignore）
 ```
 
+## 贡献
+
+这个项目被设计为**模块化、易于 fork**。每一层都是简单的、可替换的组件：
+
+| 层 | 当前实现 | 想换？ |
+|----|---------|-------|
+| **录音** | Apple 语音备忘录 | 任何能将音频同步到已知目录的 App |
+| **文件监听** | macOS `launchd WatchPaths` | `fswatch`、`inotifywait`（Linux）、轮询、云端触发 |
+| **语音识别** | Gemini 3 Flash（多模态） | Whisper、Qwen3-ASR、豆包、AssemblyAI、Deepgram — 替换 `transcribe_and_summarize()` 即可 |
+| **投递** | 文件、Apple 备忘录、飞书、Obsidian、Agent | 在 `deliveries/` 里放一个带 `deliver(note)` 函数的 `.py` 文件 |
+
+欢迎 PR：
+- **新的语音识别引擎** — Whisper、Qwen3-ASR-Flash 等
+- **新的投递目标** — Slack、Notion、微信、Telegram、邮件等
+- **更好的文件监听** — `fswatch`、跨平台方案、Linux `inotify` 支持
+- **更智能的摘要** — 自定义 prompt、话题提取、会议纪要模板
+
 ## 许可证
 
 MIT
