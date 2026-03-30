@@ -55,6 +55,30 @@ We benchmarked STT options for mixed Chinese-English audio:
 
 Gemini 3 Flash offers the best balance of quality, multilingual support, diarization, and cost for this use case.
 
+## Gotchas
+
+### TCC / Full Disk Access
+
+The Voice Memos `Group Container` directory is protected by macOS TCC (Transparency, Consent, and Control). Your terminal or the `launchd` agent needs **Full Disk Access** to read recordings.
+
+- **Quick fix:** System Settings → Privacy & Security → Full Disk Access → add your Terminal app (Terminal.app, iTerm2, etc.)
+- **Proper fix:** Wrap the script in a signed `.app` bundle and grant FDA to that bundle only — avoids giving `/bin/bash` blanket access. See [Apple's TCC docs](https://developer.apple.com/documentation/security/app-sandbox) for details.
+
+If the watcher runs but never finds new files, this is almost certainly the cause.
+
+### iCloud Optimized Storage
+
+If your Mac is low on storage, macOS may keep recordings as **zero-byte stubs** (evicted to iCloud). The file appears in the directory but has no content until downloaded.
+
+The script already skips files under 1KB, but to force-download recordings:
+
+```bash
+# Force Voice Memos to download all recordings
+open -g "/System/Applications/Voice Memos.app"
+```
+
+Or disable "Optimize Mac Storage" in System Settings → Apple ID → iCloud.
+
 ## Setup
 
 ### Prerequisites
