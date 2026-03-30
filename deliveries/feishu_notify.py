@@ -26,6 +26,7 @@ def deliver(note: dict) -> bool:
     title = note["title"]
     summary = note.get("summary", "").split("\n\n")[0][:200]  # first language, truncated
     todos = note.get("todos", [])
+    doc_url = note.get("feishu_doc_url", "")
 
     lines = [f"**{title}**", ""]
     if summary:
@@ -35,6 +36,9 @@ def deliver(note: dict) -> bool:
         lines.append("**Action Items:**")
         for item in todos:
             lines.append(f"- {item}")
+        lines.append("")
+    if doc_url:
+        lines.append(f"[Open full transcript]({doc_url})")
 
     msg = "\n".join(lines)
 
