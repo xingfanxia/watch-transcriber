@@ -13,11 +13,23 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from dotenv import load_dotenv
-
-# Load .env from script directory
+# Load .env without external dependency
 SCRIPT_DIR = Path(__file__).parent
-load_dotenv(SCRIPT_DIR / ".env")
+
+
+def load_dotenv_simple(path: Path):
+    """Load .env file into os.environ (no third-party dependency)."""
+    if not path.exists():
+        return
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        os.environ.setdefault(key.strip(), value.strip())
+
+
+load_dotenv_simple(SCRIPT_DIR / ".env")
 
 # Voice Memos recordings directory
 VOICE_MEMOS_DIR = Path.home() / "Library/Group Containers/group.com.apple.VoiceMemos.shared/Recordings"
