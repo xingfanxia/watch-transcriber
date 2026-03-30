@@ -26,7 +26,6 @@ def _parse_doc_url(stdout: str) -> str:
 
 
 def deliver(note: dict) -> bool:
-    # Check lark-cli exists
     try:
         subprocess.run(["lark-cli", "--version"], capture_output=True, timeout=5)
     except FileNotFoundError:
@@ -36,57 +35,25 @@ def deliver(note: dict) -> bool:
     title = note["title"]
     markdown = note["markdown"]
 
-    # Build command
-    cmd = [
-        "lark-cli", "docs", "+create",
-        "--title", title,
-        "--markdown", markdown,
-    ]
-
-    folder_token = os.environ.get("FEISHU_FOLDER_TOKEN")
-    wiki_space = os.environ.get("FEISHU_WIKI_SPACE")
-
-    if wiki_space:
-        cmd += ["--wiki-space", wiki_space]
-    elif folder_token:
-        cmd += ["--folder-token", folder_token]
-
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-
-    if result.returncode != 0:
-        if "argument list too long" in result.stderr.lower() or len(markdown) > 50000:
-            return _deliver_via_stdin(note, title, markdown, folder_token, wiki_space)
-        print(f"[delivery:feishu] error: {result.stderr[:500]}")
-        return False
-
-    doc_url = _parse_doc_url(result.stdout)
-    if doc_url:
-        note["feishu_doc_url"] = doc_url
-
-    print(f"[delivery:feishu] created doc '{title}'")
-    if result.stdout.strip():
-        print(f"[delivery:feishu] {result.stdout.strip()}")
-    return True
-
-
-def _deliver_via_stdin(note: dict, title: str, markdown: str, folder_token: str | None, wiki_space: str | None) -> bool:
-    """Fallback for very long content — write markdown to temp file and use --markdown @file."""
+    # Always write to temp file to avoid CLI arg length limits
     with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False, encoding="utf-8") as f:
         f.write(markdown)
         tmp_path = f.name
 
     try:
-        cmd = [
-            "lark-cli", "docs", "+create",
-            "--title", title,
-            "--markdown", f"@{tmp_path}",
-        ]
-        if wiki_space:
-            cmd += ["--wiki-space", wiki_space]
-        elif folder_token:
-            cmd += ["--folder-token", folder_token]
+        # Use shell to expand $(cat file) since lark-cli doesn't support @file
+        folder_token = os.environ.get("FEISHU_FOLDER_TOKEN", "")
+        wiki_space = os.environ.get("FEISHU_WIKI_SPACE", "")
 
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        extra_args = ""
+        if wiki_space:
+            extra_args = f'--wiki-space "{wiki_space}"'
+        elif folder_token:
+            extra_args = f'--folder-token "{folder_token}"'
+
+        cmd = f'lark-cli docs +create --title "{title}" --markdown "$(cat {tmp_path})" {extra_args}'
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=60)
+
         if result.returncode != 0:
             print(f"[delivery:feishu] error: {result.stderr[:500]}")
             return False
@@ -96,6 +63,8 @@ def _deliver_via_stdin(note: dict, title: str, markdown: str, folder_token: str 
             note["feishu_doc_url"] = doc_url
 
         print(f"[delivery:feishu] created doc '{title}'")
+        if result.stdout.strip():
+            print(f"[delivery:feishu] {result.stdout.strip()}")
         return True
     finally:
         os.unlink(tmp_path)

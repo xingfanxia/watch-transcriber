@@ -22,14 +22,15 @@ def deliver(note: dict) -> bool:
         print("[delivery:feishu_notify] lark-cli not found")
         return False
 
-    # Build a concise notification message
+    # Build notification with full bilingual summary
     title = note["title"]
-    summary = note.get("summary", "").split("\n\n")[0][:200]  # first language, truncated
+    summary = note.get("summary", "")
     todos = note.get("todos", [])
     doc_url = note.get("feishu_doc_url", "")
 
     lines = [f"**{title}**", ""]
     if summary:
+        # summary contains both en and zh separated by \n\n
         lines.append(summary)
         lines.append("")
     if todos:
