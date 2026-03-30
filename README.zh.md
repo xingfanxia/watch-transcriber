@@ -62,7 +62,7 @@ Gemini 3 Flash 在质量、多语言支持、说话人识别和成本之间取�
 - macOS，登录 iCloud（与手表同一 Apple ID）
 - Apple Watch，已安装语音备忘录（任何型号）
 - [Gemini API Key](https://aistudio.google.com/apikey)（有免费额度）
-- Claude Code 并安装 [transcribe 插件](https://github.com/anthropics/plugins)
+- Python 3.10+（google-genai 首次运行自动安装）
 
 ### 安装步骤
 

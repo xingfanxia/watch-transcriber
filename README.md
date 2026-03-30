@@ -62,7 +62,7 @@ Gemini 3 Flash offers the best balance of quality, multilingual support, diariza
 - macOS with iCloud signed in (same Apple ID as your Watch)
 - Apple Watch with Voice Memos (any model)
 - [Gemini API key](https://aistudio.google.com/apikey) (free tier available)
-- Claude Code with the [transcribe plugin](https://github.com/anthropics/plugins) installed
+- Python 3.10+ (google-genai auto-installed on first run)
 
 ### Install
 

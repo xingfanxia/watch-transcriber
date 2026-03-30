@@ -20,19 +20,13 @@ if [ ! -d "$VOICE_MEMOS_DIR" ]; then
 fi
 echo "[OK] Voice Memos directory found"
 
-# Check transcribe plugin
-TRANSCRIBE_SCRIPT="$HOME/.claude/plugins/transcribe/transcribe_any.py"
-if [ ! -f "$TRANSCRIBE_SCRIPT" ]; then
-    echo "WARNING: Transcribe plugin not found at $TRANSCRIBE_SCRIPT"
-    echo "  Install it via Claude Code: the 'transcribe' plugin"
-    echo "  Continuing setup anyway..."
-else
-    echo "[OK] Transcribe plugin found"
+# Pre-install google-genai into project venv
+if [ ! -d "$SCRIPT_DIR/venv" ]; then
+    echo "Creating venv and installing google-genai..."
+    python3 -m venv "$SCRIPT_DIR/venv"
+    "$SCRIPT_DIR/venv/bin/pip" install -q google-genai
 fi
-
-# Install python-dotenv
-pip3 install python-dotenv --quiet 2>/dev/null || true
-echo "[OK] python-dotenv installed"
+echo "[OK] google-genai installed in project venv"
 
 # Create .env if missing
 if [ ! -f "$SCRIPT_DIR/.env" ]; then
