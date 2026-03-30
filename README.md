@@ -89,6 +89,7 @@ Available deliveries:
 |--------|-------------|---------------|
 | `file` | Save markdown to a folder | `OUTPUT_DIR` |
 | `apple_notes` | Create an Apple Note | `APPLE_NOTES_FOLDER` |
+| `feishu` | Create a Feishu/Lark doc | `FEISHU_FOLDER_TOKEN` or `FEISHU_WIKI_SPACE` |
 | `obsidian_git` | Commit to a GitHub repo | `OBSIDIAN_REPO`, `GITHUB_TOKEN` |
 | `agent` | Delegate to `claude -p` | `AGENT_DELIVERY_PROMPT` |
 
@@ -162,6 +163,7 @@ watch-transcriber/
 │   ├── __init__.py            # Delivery router
 │   ├── file.py                # Markdown file output
 │   ├── apple_notes.py         # Apple Notes via AppleScript
+│   ├── feishu.py              # Feishu/Lark doc via lark-cli
 │   ├── obsidian_git.py        # GitHub commit to Obsidian vault
 │   └── agent.py               # claude -p delegation (Feishu, Slack, etc.)
 ├── setup.sh                   # One-command install

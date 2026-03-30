@@ -89,6 +89,7 @@ DELIVERY_TARGETS=file,apple_notes
 |------|------|---------|
 | `file` | 保存为 Markdown 文件 | `OUTPUT_DIR` |
 | `apple_notes` | 创建 Apple 备忘录 | `APPLE_NOTES_FOLDER` |
+| `feishu` | 创建飞书文档 | `FEISHU_FOLDER_TOKEN` 或 `FEISHU_WIKI_SPACE` |
 | `obsidian_git` | 提交到 GitHub 仓库 | `OBSIDIAN_REPO`, `GITHUB_TOKEN` |
 | `agent` | 委托给 `claude -p` | `AGENT_DELIVERY_PROMPT` |
 
@@ -162,6 +163,7 @@ watch-transcriber/
 │   ├── __init__.py            # 投递路由
 │   ├── file.py                # Markdown 文件输出
 │   ├── apple_notes.py         # Apple 备忘录（AppleScript）
+│   ├── feishu.py              # 飞书文档（lark-cli）
 │   ├── obsidian_git.py        # GitHub 提交到 Obsidian 仓库
 │   └── agent.py               # claude -p 委托（飞书、Slack 等）
 ├── setup.sh                   # 一键安装
