@@ -126,29 +126,35 @@ def transcribe_and_summarize(audio_path: Path) -> dict:
         print(f"  File processing failed: {uploaded.state}")
         return {}
 
-    # Single multimodal prompt: transcribe + summarize
-    prompt = """Listen to this audio and provide TWO things:
+    # Single multimodal prompt: transcribe + summarize (bilingual)
+    prompt = """Listen to this audio and provide the following:
 
-1. **Analysis section** (in the same language as the audio):
-   - A 2-3 sentence summary of the main content
-   - 3-7 key points as bullet points
-   - Any action items or todos mentioned (empty list if none)
+1. **English analysis:**
+   - summary_en: 2-3 sentence summary in English
+   - key_points_en: 3-7 key points in English
 
-2. **Full transcript** with speaker diarization:
+2. **Chinese analysis:**
+   - summary_zh: 2-3 sentence summary in Chinese (中文摘要)
+   - key_points_zh: 3-7 key points in Chinese (中文要点)
+
+3. **Action items** (bilingual if the audio is mixed):
+   - action_items: any todos or action items mentioned (empty list if none)
+
+4. **Full transcript** with speaker diarization:
    - Identify speakers as SPEAKER_0, SPEAKER_1, etc.
    - Use timestamps: [HH:MM:SS - HH:MM:SS] SPEAKER_X: content
    - Keep natural sentence boundaries, proper punctuation
-   - Verbatim transcription preserving spoken style
+   - IMPORTANT: transcribe verbatim in the ORIGINAL language(s) spoken. Do NOT translate the transcript.
 
 Respond in this EXACT JSON format:
 {
-  "summary": "2-3 sentence summary",
-  "key_points": ["point 1", "point 2", "..."],
+  "summary_en": "English summary here",
+  "summary_zh": "中文摘要",
+  "key_points_en": ["point 1", "point 2"],
+  "key_points_zh": ["要点一", "要点二"],
   "action_items": ["todo 1", "todo 2"],
-  "transcript": "full transcript with timestamps and speakers"
-}
-
-IMPORTANT: Respond in the SAME LANGUAGE as the audio. If mixed languages, use the dominant language for summary/key_points/action_items, but transcribe verbatim in original languages."""
+  "transcript": "full transcript with timestamps and speakers in original language"
+}"""
 
     print(f"  Transcribing + summarizing with {GEMINI_MODEL}...")
     response = client.models.generate_content(
@@ -191,8 +197,10 @@ def format_note(audio_path: Path, result: dict) -> dict:
         title = f"Voice Note {name}"
         timestamp = datetime.now().isoformat()
 
-    summary = result.get("summary", "")
-    key_points = result.get("key_points", [])
+    summary_en = result.get("summary_en", result.get("summary", ""))
+    summary_zh = result.get("summary_zh", "")
+    key_points_en = result.get("key_points_en", result.get("key_points", []))
+    key_points_zh = result.get("key_points_zh", [])
     action_items = result.get("action_items", [])
     transcript = result.get("transcript", "")
 
@@ -206,13 +214,24 @@ def format_note(audio_path: Path, result: dict) -> dict:
         "",
     ]
 
-    if summary:
-        lines += ["## Summary", "", summary, ""]
+    if summary_en or summary_zh:
+        lines += ["## Summary"]
+        if summary_en:
+            lines += ["", summary_en]
+        if summary_zh:
+            lines += ["", summary_zh]
+        lines.append("")
 
-    if key_points:
-        lines += ["## Key Points", ""]
-        for point in key_points:
-            lines.append(f"- {point}")
+    if key_points_en or key_points_zh:
+        lines += ["## Key Points"]
+        if key_points_en:
+            lines.append("")
+            for point in key_points_en:
+                lines.append(f"- {point}")
+        if key_points_zh:
+            lines.append("")
+            for point in key_points_zh:
+                lines.append(f"- {point}")
         lines.append("")
 
     if action_items:
@@ -233,7 +252,7 @@ def format_note(audio_path: Path, result: dict) -> dict:
     return {
         "title": title,
         "transcript": transcript.strip(),
-        "summary": summary,
+        "summary": f"{summary_en}\n\n{summary_zh}".strip(),
         "todos": action_items,
         "audio_path": str(audio_path),
         "timestamp": timestamp,
@@ -260,10 +279,13 @@ def process_recording(audio_path: Path) -> bool:
         return False
 
     transcript = result.get("transcript", "")
-    summary = result.get("summary", "")
+    summary_en = result.get("summary_en", result.get("summary", ""))
+    summary_zh = result.get("summary_zh", "")
     print(f"  Transcript: {len(transcript)} chars")
-    if summary:
-        print(f"  Summary: {summary[:100]}...")
+    if summary_en:
+        print(f"  Summary (EN): {summary_en[:100]}...")
+    if summary_zh:
+        print(f"  Summary (ZH): {summary_zh[:100]}...")
 
     # Format note
     note = format_note(audio_path, result)
