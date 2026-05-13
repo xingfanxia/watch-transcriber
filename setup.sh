@@ -37,9 +37,19 @@ fi
 # Create state directory
 mkdir -p "$SCRIPT_DIR/state"
 
+# Detect asdf shims path (for lark-cli, node, etc.)
+ASDF_SHIMS="${ASDF_DATA_DIR:-$HOME/.asdf}/shims"
+if [ ! -d "$ASDF_SHIMS" ]; then
+    ASDF_SHIMS=""
+fi
+
 # Generate launchd plist with actual paths
-sed "s|__INSTALL_DIR__|$SCRIPT_DIR|g; s|__VOICE_MEMOS_DIR__|$VOICE_MEMOS_DIR|g" \
+sed "s|__INSTALL_DIR__|$SCRIPT_DIR|g; s|__VOICE_MEMOS_DIR__|$VOICE_MEMOS_DIR|g; s|__ASDF_SHIMS__:||g; s|__ASDF_SHIMS__||g" \
     "$PLIST_SRC" > "$PLIST_DST"
+# Inject asdf shims into PATH if available
+if [ -n "$ASDF_SHIMS" ]; then
+    sed -i '' "s|/usr/local/bin|$ASDF_SHIMS:/usr/local/bin|" "$PLIST_DST"
+fi
 echo "[OK] LaunchAgent plist installed at $PLIST_DST"
 
 # Unload if already loaded, then load
