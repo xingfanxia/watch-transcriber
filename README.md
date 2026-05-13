@@ -112,6 +112,7 @@ Available deliveries:
 | Target | Description | Config needed |
 |--------|-------------|---------------|
 | `file` | Save markdown to a folder | `OUTPUT_DIR` |
+| `local_archive` | Structured `data/YYYY-MM-DD/` archive with per-recording `.md`, `daily.md`, `daily.html` rollup | `LOCAL_ARCHIVE_DIR` (default `./data`), `LOCAL_ARCHIVE_HTML=0` to skip HTML |
 | `apple_notes` | Create an Apple Note | `APPLE_NOTES_FOLDER` |
 | `feishu` | Create a Feishu/Lark doc | `FEISHU_FOLDER_TOKEN` or `FEISHU_WIKI_SPACE` |
 | `feishu_notify` | DM summary via Feishu bot | `FEISHU_NOTIFY_USER_ID` |
@@ -141,6 +142,16 @@ AGENT_DELIVERY_PROMPT=use gws-gmail-send to email me@example.com subject '{title
 ```bash
 # Process any new recordings right now
 python3 transcribe.py
+
+# Verify setup (env vars, FDA, delivery prerequisites, LaunchAgent state)
+python3 transcribe.py --doctor
+
+# Preview what would happen without calling Gemini or running deliveries
+python3 transcribe.py --dry-run
+
+# Reprocess all recordings from a specific date (ignores processed-state)
+python3 transcribe.py --reprocess 2026-05-13
+python3 transcribe.py --reprocess 2026-05-13 --dry-run   # preview only
 ```
 
 ### Map Action Button (Apple Watch Ultra)
@@ -187,8 +198,10 @@ watch-transcriber/
 ├── deliveries/
 │   ├── __init__.py            # Delivery router
 │   ├── file.py                # Markdown file output
+│   ├── local_archive.py       # Structured data/YYYY-MM-DD/ archive (per-recording + daily rollup + HTML)
 │   ├── apple_notes.py         # Apple Notes via AppleScript
 │   ├── feishu.py              # Feishu/Lark doc via lark-cli
+│   ├── feishu_notify.py       # Feishu bot DM with link to created doc
 │   ├── obsidian_git.py        # GitHub commit to Obsidian vault
 │   └── agent.py               # claude -p delegation (Feishu, Slack, etc.)
 ├── setup.sh                   # One-command install

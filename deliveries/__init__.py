@@ -17,7 +17,7 @@ import importlib
 import os
 
 
-BUILTIN_DELIVERIES = ["file", "apple_notes", "obsidian_git", "agent"]
+BUILTIN_DELIVERIES = ["file", "local_archive", "apple_notes", "feishu", "feishu_notify", "obsidian_git", "agent"]
 
 
 def get_active_deliveries() -> list[str]:
