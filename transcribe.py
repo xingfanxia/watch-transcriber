@@ -67,11 +67,18 @@ STT_PROVIDER = os.environ.get("STT_PROVIDER", "gemini").lower()
 # OpenAI gpt-4o-transcribe-diarize has 25MB / 1500s per-request limits.
 # Target chunk size sits comfortably under both, with silence-aware boundaries
 # so we don't cut mid-sentence.
-CHUNK_THRESHOLD_SEC = int(os.environ.get("CHUNK_THRESHOLD_SEC", "900"))   # only chunk if audio > 15 min
-CHUNK_TARGET_SEC = int(os.environ.get("CHUNK_TARGET_SEC", "480"))          # aim for ~8 min chunks
-CHUNK_MIN_SEC = int(os.environ.get("CHUNK_MIN_SEC", "300"))                # but at least 5 min
-CHUNK_MAX_SEC = int(os.environ.get("CHUNK_MAX_SEC", "720"))                # and at most 12 min
+CHUNK_THRESHOLD_SEC = int(os.environ.get("CHUNK_THRESHOLD_SEC", "1080"))  # only chunk if audio > 18 min
+CHUNK_TARGET_SEC = int(os.environ.get("CHUNK_TARGET_SEC", "720"))          # aim for ~12 min chunks
+CHUNK_MIN_SEC = int(os.environ.get("CHUNK_MIN_SEC", "480"))                # but at least 8 min
+CHUNK_MAX_SEC = int(os.environ.get("CHUNK_MAX_SEC", "900"))                # and at most 15 min (Gemini coherence edge)
 CHUNK_PARALLELISM = int(os.environ.get("CHUNK_PARALLELISM", "8"))          # concurrent chunk API calls
+# Overlap between adjacent chunks (in seconds). Lets us reconcile speaker
+# labels across chunks: the overlap region is transcribed in BOTH chunks,
+# so we can match SPEAKER_X in chunk k to SPEAKER_Y in chunk k-1 by
+# timestamp proximity of turns in the overlap. Longer overlap = more
+# voting evidence per speaker, more robust mapping. 60s gives ~6-10 turns
+# of evidence per boundary in typical conversation. Set 0 to disable.
+CHUNK_OVERLAP_SEC = int(os.environ.get("CHUNK_OVERLAP_SEC", "60"))
 
 
 def load_state() -> set[str]:
@@ -180,6 +187,12 @@ def _parse_time(ts: str) -> int:
 
 
 _TIMESTAMP_RE = re.compile(r"\[(\d{1,2}:\d{1,2}:\d{1,2})\s*-\s*(\d{1,2}:\d{1,2}:\d{1,2})\]")
+# Matches a single diarized turn line like:
+#   [00:00:20 - 00:00:45] SPEAKER_0: content
+# Tolerates 1-2 digit timestamp components and either SPEAKER_N or single-letter (OpenAI) labels.
+_TURN_RE = re.compile(
+    r"^\[(\d{1,2}:\d{1,2}:\d{1,2})\s*-\s*(\d{1,2}:\d{1,2}:\d{1,2})\]\s+(SPEAKER_\d+|[A-Z]):\s*(.*)$"
+)
 
 
 def _offset_timestamps(transcript: str, offset_sec: float) -> str:
@@ -191,6 +204,162 @@ def _offset_timestamps(transcript: str, offset_sec: float) -> str:
         return f"[{_fmt_time(start)} - {_fmt_time(end)}]"
 
     return _TIMESTAMP_RE.sub(replace, transcript)
+
+
+def _offset_and_filter_timestamps(transcript: str, offset_sec: float, max_internal_sec: float) -> str:
+    """Shift timestamps by offset; drop turn lines whose internal start > max_internal_sec.
+
+    Gemini occasionally hallucinates timestamps far past the chunk's actual
+    duration (e.g., a 12-min chunk emits `[10:20:00]`). After offset these
+    end up as obviously-bogus absolute times. Drop them so downstream
+    reconciliation and the final transcript stay clean.
+    """
+    out_lines = []
+    tolerance = 30.0  # seconds — keep turns slightly past chunk end (Gemini may extend)
+    for line in transcript.splitlines():
+        m = _TURN_RE.match(line)
+        if not m:
+            out_lines.append(line)
+            continue
+        internal_start = _parse_time(m.group(1))
+        if internal_start > max_internal_sec + tolerance:
+            continue  # hallucinated past chunk end — drop
+        internal_end = _parse_time(m.group(2))
+        new_start = internal_start + offset_sec
+        new_end = internal_end + offset_sec
+        new_line = _TIMESTAMP_RE.sub(
+            f"[{_fmt_time(new_start)} - {_fmt_time(new_end)}]", line, count=1
+        )
+        out_lines.append(new_line)
+    return "\n".join(out_lines)
+
+
+def _parse_diarized_lines(transcript: str):
+    """Return list of dicts per line; turn lines have start/end/speaker/content."""
+    out = []
+    for line in transcript.splitlines():
+        m = _TURN_RE.match(line)
+        if m:
+            out.append({
+                "is_turn": True,
+                "start": _parse_time(m.group(1)),
+                "end": _parse_time(m.group(2)),
+                "speaker": m.group(3),
+                "content": m.group(4),
+                "raw": line,
+            })
+        else:
+            out.append({"is_turn": False, "raw": line})
+    return out
+
+
+def _reconcile_speakers_across_chunks(chunk_records):
+    """Align speaker labels across chunks.
+
+    Each chunk except the first overlaps the previous by ~CHUNK_OVERLAP_SEC.
+    For chunks 1..N: find diarized turns in the overlap region [chunk.offset,
+    prev.end_abs] in BOTH chunks; for each cur turn, find the prev turn whose
+    start time is closest. Each match votes "cur SPEAKER_X == prev SPEAKER_Y".
+    Most-voted mapping per cur speaker wins; apply to all of cur's turns.
+
+    Mapping is applied cumulatively — chunk 0 is canonical, chunk 1 maps to
+    chunk 0, chunk 2 maps to (already-remapped) chunk 1, etc. — so labels
+    flow from chunk 0 forward.
+
+    `chunk_records` is mutated in-place: each entry's `parsed` is updated.
+    """
+    if len(chunk_records) <= 1:
+        return
+
+    # Parse each chunk once
+    for rec in chunk_records:
+        rec["parsed"] = _parse_diarized_lines(rec["text"])
+
+    for k in range(1, len(chunk_records)):
+        prev = chunk_records[k - 1]
+        cur = chunk_records[k]
+        overlap_start = cur["offset"]
+        overlap_end = prev["end_abs"]  # absolute time at which previous chunk ended
+        if overlap_end <= overlap_start:
+            continue  # no overlap window (shouldn't happen if CHUNK_OVERLAP_SEC > 0)
+
+        prev_turns = [t for t in prev["parsed"]
+                      if t["is_turn"] and overlap_start <= t["start"] < overlap_end]
+        cur_turns = [t for t in cur["parsed"]
+                     if t["is_turn"] and overlap_start <= t["start"] < overlap_end]
+
+        if not prev_turns or not cur_turns:
+            continue  # nothing to match in the overlap
+
+        # Vote: for each cur turn, nearest prev turn casts a vote for that speaker mapping.
+        votes = {}  # cur_speaker -> {prev_speaker: count}
+        for ct in cur_turns:
+            closest = min(prev_turns, key=lambda pt: abs(pt["start"] - ct["start"]))
+            if abs(closest["start"] - ct["start"]) > 5.0:
+                continue  # too far apart, probably not the same audio moment
+            votes.setdefault(ct["speaker"], {}).setdefault(closest["speaker"], 0)
+            votes[ct["speaker"]][closest["speaker"]] += 1
+
+        mapping = {}
+        for cur_sp, prev_votes in votes.items():
+            best_prev, _ = max(prev_votes.items(), key=lambda x: x[1])
+            if cur_sp != best_prev:
+                mapping[cur_sp] = best_prev
+
+        if not mapping:
+            continue
+
+        # Detect swap collisions: if mapping says cur SPEAKER_X -> SPEAKER_Y
+        # but the cur chunk also has un-mapped turns labeled SPEAKER_Y (a
+        # different actual speaker), we'd merge two speakers into one. Add
+        # the inverse mapping (SPEAKER_Y -> SPEAKER_X) so they swap atomically.
+        cur_speakers = {t["speaker"] for t in cur["parsed"] if t["is_turn"]}
+        for src, dst in list(mapping.items()):
+            if dst in cur_speakers and dst not in mapping:
+                mapping[dst] = src
+
+        # Apply mapping atomically via a temp-prefix two-pass so renames
+        # don't collide mid-walk (e.g. SPEAKER_0->SPEAKER_1 and SPEAKER_1->SPEAKER_0).
+        TMP = "__RECONCILE_TMP_"
+        for t in cur["parsed"]:
+            if t["is_turn"] and t["speaker"] in mapping:
+                old = t["speaker"]
+                tmp = TMP + mapping[old]
+                t["raw"] = t["raw"].replace(f"] {old}:", f"] {tmp}:", 1)
+                t["speaker"] = tmp
+        for t in cur["parsed"]:
+            if t["is_turn"] and t["speaker"].startswith(TMP):
+                final = t["speaker"][len(TMP):]
+                t["raw"] = t["raw"].replace(f"] {t['speaker']}:", f"] {final}:", 1)
+                t["speaker"] = final
+
+
+def _join_chunks_dropping_overlap(chunk_records) -> str:
+    """Concatenate chunk texts. For chunks 1..N, drop turn lines that fall in
+    the overlap region (start < previous chunk's end_abs) — those are already
+    in the previous chunk's output. Non-turn lines (preambles, blanks) in the
+    overlap region are dropped too.
+    """
+    parts = []
+    for k, rec in enumerate(chunk_records):
+        if "parsed" not in rec:
+            rec["parsed"] = _parse_diarized_lines(rec["text"])
+        if k == 0:
+            parts.append("\n".join(t["raw"] for t in rec["parsed"]))
+            continue
+        prev_end = chunk_records[k - 1]["end_abs"]
+        kept = []
+        # Find the first turn that's past the overlap; from there, keep everything
+        first_past_overlap = None
+        for i, t in enumerate(rec["parsed"]):
+            if t["is_turn"] and t["start"] >= prev_end:
+                first_past_overlap = i
+                break
+        if first_past_overlap is None:
+            continue  # whole chunk is overlap (shouldn't happen)
+        kept = [t["raw"] for t in rec["parsed"][first_past_overlap:]]
+        parts.append("\n".join(kept))
+    return "\n\n".join(parts)
 
 
 def _detect_silence(audio_path: Path, noise_db: int = -30, min_duration: float = 0.5):
@@ -262,22 +431,28 @@ def _chunk_audio_at_silence(audio_path: Path):
     tmp_dir = Path(tempfile.mkdtemp(prefix="watch_chunk_"))
     chunks = []
     for i in range(len(splits) - 1):
-        start, end = splits[i], splits[i + 1]
+        # Overlap with previous chunk so speaker-label reconciliation has
+        # a shared region to match on. Chunk i transcribes audio from
+        # split[i] - overlap → split[i+1]; offset stays at split[i] - overlap
+        # so reassembled timestamps are still on the absolute timeline.
+        nominal_start = splits[i]
+        actual_start = nominal_start if i == 0 else max(0.0, nominal_start - CHUNK_OVERLAP_SEC)
+        end = splits[i + 1]
         chunk_path = tmp_dir / f"chunk_{i:02d}.m4a"
         try:
             subprocess.run(
                 [
                     "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-                    "-ss", str(start), "-to", str(end),
+                    "-ss", str(actual_start), "-to", str(end),
                     "-i", str(audio_path),
                     "-c", "copy",
                     str(chunk_path),
                 ],
                 check=True, timeout=180,
             )
-            chunks.append((chunk_path, start, end - start))
+            chunks.append((chunk_path, actual_start, end - actual_start))
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-            print(f"  [chunk] failed to extract chunk {i} ({start:.0f}-{end:.0f}s): {e}")
+            print(f"  [chunk] failed to extract chunk {i} ({actual_start:.0f}-{end:.0f}s): {e}")
 
     def cleanup():
         for cp, _, _ in chunks:
@@ -344,7 +519,7 @@ def _gemini_transcribe(client, audio_path: Path) -> str:
 
         n = len(chunks)
         workers = min(CHUNK_PARALLELISM, n)
-        print(f"  Transcribing with {GEMINI_MODEL} in {n} chunks (silence-aware, {workers} parallel)...")
+        print(f"  Transcribing with {GEMINI_MODEL} in {n} chunks (silence-aware, {workers} parallel, {CHUNK_OVERLAP_SEC}s overlap)...")
 
         def run(idx_chunk):
             i, (chunk_path, offset, chunk_dur) = idx_chunk
@@ -352,13 +527,26 @@ def _gemini_transcribe(client, audio_path: Path) -> str:
             t0 = time.time()
             text = _gemini_transcribe_one(client, chunk_path)
             print(f"    chunk {i+1}/{n} DONE  ({time.time()-t0:.0f}s, {len(text)} chars)")
-            return i, _offset_timestamps(text, offset)
+            # Filter out hallucinated out-of-bounds timestamps, then offset.
+            return i, _offset_and_filter_timestamps(text, offset, chunk_dur)
 
         results = [None] * n
         with ThreadPoolExecutor(max_workers=workers) as pool:
             for i, text in pool.map(run, enumerate(chunks)):
                 results[i] = text
-        return "\n\n".join(t for t in results if t)
+
+        # Build chunk_records preserving offset / end_abs, then reconcile
+        # speaker labels across chunks via the overlap region.
+        chunk_records = [
+            {
+                "offset": chunks[i][1],
+                "end_abs": chunks[i][1] + chunks[i][2],
+                "text": results[i] or "",
+            }
+            for i in range(n)
+        ]
+        _reconcile_speakers_across_chunks(chunk_records)
+        return _join_chunks_dropping_overlap(chunk_records)
     finally:
         cleanup()
 
@@ -445,7 +633,21 @@ def _openai_transcribe(audio_path: Path) -> str:
         with ThreadPoolExecutor(max_workers=workers) as pool:
             for i, text in pool.map(run, enumerate(chunks)):
                 results[i] = text
-        return "\n".join(t for t in results if t)
+
+        if n == 1:
+            return results[0] or ""
+
+        # Reconcile speaker labels across chunks via the overlap region.
+        chunk_records = [
+            {
+                "offset": chunks[i][1],
+                "end_abs": chunks[i][1] + chunks[i][2],
+                "text": results[i] or "",
+            }
+            for i in range(n)
+        ]
+        _reconcile_speakers_across_chunks(chunk_records)
+        return _join_chunks_dropping_overlap(chunk_records)
     finally:
         cleanup()
 
