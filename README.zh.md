@@ -47,13 +47,22 @@ iOS 18+ 的语音备忘录自带转写功能，但是：
 | 服务商 | 中英混合 MER | 每小时成本 | 说话人识别 |
 |--------|-------------|-----------|-----------|
 | Gemini 3 Pro | **7.2%**（最佳） | ~$0.50-2 | 否（需 prompt 引导） |
-| Gemini 3 Flash | 良好 | ~$0.10 | 是 |
+| Gemini 3 Flash Preview | 良好 | ~$0.10 | 是 |
+| OpenAI gpt-4o-transcribe-diarize | 英文 OK，中英混合较弱 | $0.45/hr | 是（原生） |
 | Qwen3-ASR-Flash | 5.78% WER | ~$0.04 | 否 |
 | OpenAI Whisper API | ~12%（单语言） | $0.36 | 否 |
 | 豆包 ASR | 中文好，混合一般 | 未公开 | 未知 |
 | Deepgram Nova-3 | 不支持中文 | $0.31 | 是 |
 
-Gemini 3 Flash 在质量、多语言支持、说话人识别和成本之间取得了最佳平衡。
+默认走 Gemini 3 Flash Preview。在一段 2 小时中英混合录音上和 `gpt-4o-transcribe-diarize` 做了完整对比，Gemini 在标点、code-switching（`ROI` 保留为 `ROI`，OpenAI 转成了 `RY`）、不会从中文语气词幻觉出英文片段（OpenAI 把 "嗯"/"是" 转成了 `"She is she."`）这几方面都胜出。需要更细颗粒度的语气词捕捉时可以用 `STT_PROVIDER=openai` 切换到 OpenAI。
+
+### 长音频处理（静音切分 + 并行）
+
+Gemini 3 Flash 单次调用处理 >15 分钟音频时会**循环并伪造时间戳**。本流水线会自动把长音频按静音边界切分（`ffmpeg silencedetect`），**并行**转写各 chunk（默认 8 并发）。
+
+2 小时音频：切成 ~15 段（每段 5-12 分钟），并行转写 → 总耗时 ~37 秒（串行需要 ~8 分钟），而且**无循环、无伪造时间戳**。各 chunk 的时间戳在拼回时偏移回绝对时间。摘要生成是一个独立的文本输入调用，所以避开了长输出 JSON 模式的脆弱性。
+
+可调环境变量：`CHUNK_THRESHOLD_SEC` / `CHUNK_TARGET_SEC` / `CHUNK_MIN_SEC` / `CHUNK_MAX_SEC` / `CHUNK_PARALLELISM`（见 `.env.example`）。
 
 ## 踩坑指南
 
@@ -70,7 +79,7 @@ Gemini 3 Flash 在质量、多语言支持、说话人识别和成本之间取�
 
 如果 Mac 存储空间紧张，macOS 可能会把录音保存为**零字节 stub**（已卸载到 iCloud）。文件出现在目录里但没有内容，需要等下载完成。
 
-脚本已经会跳过小于 1KB 的文件，但如果想强制下载：
+脚本已经会跳过小于 1KB 的文件，以及短于 `MIN_DURATION_SECONDS`（默认 60 秒，见 `.env.example`）的录音。如果想强制下载文件：
 
 ```bash
 # 强制语音备忘录下载所有录音
@@ -79,14 +88,31 @@ open -g "/System/Applications/Voice Memos.app"
 
 或者在系统设置 → Apple ID → iCloud 中关闭「优化 Mac 存储空间」。
 
+### lark-cli appsecret 从钥匙串消失
+
+如果飞书投递突然开始报 `keychain entry not found: lark-cli/appsecret:cli_a942426c0ab81cdd`，是 macOS 钥匙串里 lark-cli 的 OAuth 凭据被擦了（钥匙串重置、login keychain 重建、不完整重装都会触发）。`~/.lark-cli/config.json` 配置文件还在引用这个 app，但 secret 没了，连 `auth login` 都启动不了（device-flow OAuth 需要 appsecret 才能开始）。
+
+恢复（需要之前保存过 appsecret，比如 1Password 里）：
+
+```bash
+printf '%s' '<APPSECRET>' | lark-cli config init \
+  --app-id cli_a942426c0ab81cdd --app-secret-stdin --brand feishu
+lark-cli auth login --recommend --no-wait --json   # → 用返回的 verification_url
+lark-cli auth login --device-code <code>           # → 阻塞等待用户授权
+lark-cli auth status                               # → 应该看到 tokenStatus: valid
+```
+
+要删除文档还需要 `drive:drive` scope，这个 scope 需要 Lark app 后台管理员审批：批准后重跑 `lark-cli auth login --scope "drive:drive offline_access" --no-wait --json`。
+
 ## 安装
 
 ### 前置条件
 
 - macOS，登录 iCloud（与手表同一 Apple ID）
 - Apple Watch，已安装语音备忘录（任何型号）
-- [Gemini API Key](https://aistudio.google.com/apikey)（有免费额度）
-- Python 3.10+（google-genai 首次运行自动安装）
+- [Gemini API Key](https://aistudio.google.com/apikey)
+- Python **3.12+**（系统自带的 `python3` 是 3.9，太老；用 `brew install python@3.12` 或 asdf 装）
+- `ffmpeg` — 长音频静音切分必需。`brew install ffmpeg`
 
 ### 安装步骤
 
@@ -141,6 +167,19 @@ AGENT_DELIVERY_PROMPT=use gws-gmail-send to email me@example.com subject '{title
 ```bash
 # 立即处理所有新录音
 python3 transcribe.py
+
+# 验证环境（API key、FDA 权限、投递依赖、LaunchAgent 状态）
+python3 transcribe.py --doctor
+
+# 不调用 Gemini、不投递，只预览要做什么
+python3 transcribe.py --dry-run
+
+# 重新处理某一天的所有录音（无视 processed-state）
+python3 transcribe.py --reprocess 2026-05-13
+python3 transcribe.py --reprocess 2026-05-13 --dry-run   # 只预览
+
+# 临时换 OpenAI 提供商
+STT_PROVIDER=openai python3 transcribe.py
 ```
 
 ### 设置 Action Button（Apple Watch Ultra）
