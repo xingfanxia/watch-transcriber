@@ -58,9 +58,17 @@ Gemini 3 Flash Preview is the default. On a 2-hour Chinese+English voice note we
 
 ### Long-audio handling (silence-aware chunking + parallel)
 
-Gemini 3 Flash in a single call loops and fabricates timestamps on audio longer than ~15 minutes. This pipeline auto-chunks long audio at silence boundaries (`ffmpeg silencedetect`) and transcribes chunks **in parallel** (8 concurrent by default).
+Gemini 3 Flash in a single call **silently drops/summarizes** on audio longer than ~15 minutes — verified on a 2hr file where the single-call output ended at 1h22m and collapsed 71 minutes into a one-line "turn". This pipeline auto-chunks long audio at silence boundaries (`ffmpeg silencedetect`) and transcribes chunks **in parallel** (8 concurrent by default).
 
-For a 2-hour file: ~15 chunks of 5-12 min each, transcribed in parallel → ~37 sec wall time instead of ~8 min serial — and crucially **no loops**, no fabricated timestamps. Each chunk's timestamps are offset back to absolute time during reassembly. The summary step runs as a separate text-input call after transcription, so JSON-mode brittleness on long outputs is avoided.
+For a 2-hour file: ~10 chunks of 8-15 min each, transcribed in parallel → ~60 sec wall time instead of ~10 min serial — and crucially **full coverage** with no fabricated content. Each chunk's timestamps are offset to absolute time, then a stitching layer:
+
+- **drops malformed lines** (`[X -` no closing bracket — Gemini garbage)
+- **clamps utterance length** (any single turn > 2 min is hallucination)
+- **clamps timestamps past audio end** (post-EOF silence transcribed into fabricated dialogue)
+- **drops Gemini compliance preamble + `（注：...）` meta-commentary**
+- **filters out chunk-overlap duplicates** per-line + sorts chronologically (robust to Gemini emitting out-of-order chunks)
+
+The summary step runs as a separate text-input call after transcription, so JSON-mode brittleness on long outputs is avoided. Transient Gemini errors (503/429/5xx) on individual chunks retry up to 3 times with exponential backoff instead of aborting the full job.
 
 Tunable via `CHUNK_THRESHOLD_SEC` / `CHUNK_TARGET_SEC` / `CHUNK_MIN_SEC` / `CHUNK_MAX_SEC` / `CHUNK_PARALLELISM` env vars (see `.env.example`).
 

@@ -58,9 +58,17 @@ iOS 18+ 的语音备忘录自带转写功能，但是：
 
 ### 长音频处理（静音切分 + 并行）
 
-Gemini 3 Flash 单次调用处理 >15 分钟音频时会**循环并伪造时间戳**。本流水线会自动把长音频按静音边界切分（`ffmpeg silencedetect`），**并行**转写各 chunk（默认 8 并发）。
+Gemini 3 Flash 单次调用处理 >15 分钟音频时会**静默 summarize / 丢内容** — 在 2 小时文件上实测，单次调用的输出只到 01:22:00 就停了，并且把 71 分钟的对话塞进了一行 "turn"。本流水线会自动把长音频按静音边界切分（`ffmpeg silencedetect`），**并行**转写各 chunk（默认 8 并发）。
 
-2 小时音频：切成 ~15 段（每段 5-12 分钟），并行转写 → 总耗时 ~37 秒（串行需要 ~8 分钟），而且**无循环、无伪造时间戳**。各 chunk 的时间戳在拼回时偏移回绝对时间。摘要生成是一个独立的文本输入调用，所以避开了长输出 JSON 模式的脆弱性。
+2 小时音频：切成 ~10 段（每段 8-15 分钟），并行转写 → 总耗时 ~60 秒（串行需要 ~10 分钟），而且**全程覆盖、无伪造内容**。各 chunk 的时间戳偏移回绝对时间后，stitching 层会：
+
+- **丢弃残缺行**（`[X -` 没有 `]` 收尾 — Gemini 偶发垃圾输出）
+- **clamp 单条 utterance 长度**（任何 > 2 分钟的单 turn 都是幻觉）
+- **clamp 超出音频长度的时间戳**（尾部 silence 被 Gemini 当对话转录）
+- **丢弃 Gemini compliance preamble 和 `（注：...）` 注释行**
+- **按 start 时间过滤 chunk 重叠区 + 全局重排**（对 Gemini 偶发的非时序输出鲁棒）
+
+摘要生成是一个独立的文本输入调用，所以避开了长输出 JSON 模式的脆弱性。chunk 级的 Gemini 503/429/5xx 瞬时错误会重试最多 3 次（指数 backoff），而不是让整个任务挂掉。
 
 可调环境变量：`CHUNK_THRESHOLD_SEC` / `CHUNK_TARGET_SEC` / `CHUNK_MIN_SEC` / `CHUNK_MAX_SEC` / `CHUNK_PARALLELISM`（见 `.env.example`）。
 

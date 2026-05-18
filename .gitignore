@@ -6,4 +6,5 @@ venv/
 state/
 data/
 data-openai/
+data-senko/
 cclogs/

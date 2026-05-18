@@ -52,8 +52,11 @@ VOICE_MEMOS_DIR = Path.home() / "Library/Group Containers/group.com.apple.VoiceM
 STATE_DIR = SCRIPT_DIR / "state"
 STATE_FILE = STATE_DIR / "processed.json"
 
-# Gemini model
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
+# Gemini model. Default = gemini-3-flash-preview. Note: on >15min audio in a
+# single call, Gemini 3 silently summarizes / drops segments — verified on a
+# 2hr file 2026-05-18 where single-call output ended at 1h22m and collapsed
+# 71min into one line. Chunking (below) is what makes it usable.
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3-flash-preview")
 
 # Skip recordings shorter than this (seconds). Voice Memos sometimes captures
 # brief accidental taps; transcribing them wastes API quota.
@@ -63,7 +66,7 @@ MIN_DURATION_SECONDS = int(os.environ.get("MIN_DURATION_SECONDS", "60"))
 STT_PROVIDER = os.environ.get("STT_PROVIDER", "gemini").lower()
 
 # Chunking thresholds (used by both providers).
-# Gemini 3 Flash loses coherence on >15min audio (loops, fabricated timestamps).
+# Gemini 3 Flash silently summarizes / drops segments on long single-call audio.
 # OpenAI gpt-4o-transcribe-diarize has 25MB / 1500s per-request limits.
 # Target chunk size sits comfortably under both, with silence-aware boundaries
 # so we don't cut mid-sentence.
@@ -193,15 +196,27 @@ def _parse_time(ts: str) -> int:
 
 
 # Accept 2-component (MM:SS) and 3-component (HH:MM:SS) timestamps. Gemini occasionally
-# emits the 2-component form on chunks with short internal time.
+# emits the 2-component form on chunks with short internal time, AND sometimes
+# emits a trailing `:` artifact like `[06:41: - 06:42]` (presumably truncating
+# HH:MM:SS to MM:SS but leaving the separator) — the `:?` tolerates that.
 _TIMESTAMP_RE = re.compile(
-    r"\[(\d{1,2}:\d{1,2}(?::\d{1,2})?)\s*-\s*(\d{1,2}:\d{1,2}(?::\d{1,2})?)\]"
+    r"\[(\d{1,2}:\d{1,2}(?::\d{1,2})?):?\s*-\s*(\d{1,2}:\d{1,2}(?::\d{1,2})?):?\]"
 )
 # Matches a single diarized turn line like:
 #   [00:00:20 - 00:00:45] SPEAKER_0: content
-# Tolerates 1-2 digit components, 2- or 3-component timestamps, SPEAKER_N or single-letter labels.
+# Tolerates 1-2 digit components, 2- or 3-component timestamps, optional
+# trailing-`:` artifact, SPEAKER_N or single-letter labels.
 _TURN_RE = re.compile(
-    r"^\[(\d{1,2}:\d{1,2}(?::\d{1,2})?)\s*-\s*(\d{1,2}:\d{1,2}(?::\d{1,2})?)\]\s+(SPEAKER_\d+|[A-Z]):\s*(.*)$"
+    r"^\[(\d{1,2}:\d{1,2}(?::\d{1,2})?):?\s*-\s*(\d{1,2}:\d{1,2}(?::\d{1,2})?):?\]\s+(SPEAKER_\d+|[A-Z]):\s*(.*)$"
+)
+# Lines Gemini sometimes emits that aren't part of the transcript itself:
+#   - "好的，以下是这段音频的逐字转录" (compliance preamble)
+#   - "（注：此段时间主要为...）" (meta-commentary about quiet sections)
+#   - "Here is the transcription:" etc.
+# Drop them before they end up in the final document.
+_META_LINE_RE = re.compile(
+    r"^\s*(好的|以下是|这是.{0,15}(转录|音频)|（注[：:]|\(Note[：:]|Here.{0,5}(is|'s).{0,20}(transcription|transcript)|\[?.*?as an? AI)",
+    re.IGNORECASE,
 )
 
 
@@ -216,31 +231,78 @@ def _offset_timestamps(transcript: str, offset_sec: float) -> str:
     return _TIMESTAMP_RE.sub(replace, transcript)
 
 
-def _offset_and_filter_timestamps(transcript: str, offset_sec: float, max_internal_sec: float) -> str:
-    """Shift timestamps by offset; drop turn lines whose internal start > max_internal_sec.
+def _offset_and_filter_timestamps(
+    transcript: str,
+    offset_sec: float,
+    max_internal_sec: float,
+    audio_duration_sec: float = 0.0,
+) -> str:
+    """Shift timestamps by offset; clean up Gemini chunk-output anomalies.
 
-    Gemini occasionally hallucinates timestamps far past the chunk's actual
-    duration (e.g., a 12-min chunk emits `[10:20:00]`). After offset these
-    end up as obviously-bogus absolute times. Drop them so downstream
-    reconciliation and the final transcript stay clean.
+    Handles:
+      - Turn line with start past chunk end → drop (hallucinated).
+      - Turn line with end past chunk end / end before start / huge utterance → clamp.
+      - Turn line with absolute end > audio_duration_sec → clamp to audio end
+        (handles chunks that ffmpeg padded with silence past EOF, which Gemini
+        then "transcribed" with fabricated 02:00+ timestamps).
+      - Lines that OPEN with `[<time>` but never close `]` → drop (malformed turn).
+      - Gemini compliance preamble / `（注：...）` meta lines → drop.
+      - Non-turn lines (silence markers `[X - Y] ( silence )`, summary intros) →
+        offset any embedded timestamps so they're absolute.
     """
     out_lines = []
-    tolerance = 30.0  # seconds — keep turns slightly past chunk end (Gemini may extend)
+    tolerance = 30.0           # seconds — keep turns slightly past chunk end (Gemini may extend)
+    max_utterance_sec = 120.0  # cap any single turn at 2 min — longer is always hallucination
     for line in transcript.splitlines():
         m = _TURN_RE.match(line)
-        if not m:
-            out_lines.append(line)
+        if m:
+            internal_start = _parse_time(m.group(1))
+            if internal_start > max_internal_sec + tolerance:
+                continue  # hallucinated past chunk end — drop
+            internal_end = _parse_time(m.group(2))
+            # Clamp in priority order (each step constrains the next):
+            #   1. Utterance length cap (handles `[01:33:21 - 02:33:23]` 2-second
+            #      joke claiming a 1h duration — Gemini's most common anomaly).
+            #   2. Chunk-end clamp (catches cases #1 missed because start is
+            #      legitimately late in the chunk).
+            #   3. Final monotonicity (after the above, end may end up < start;
+            #      give the line a 5s minimum duration).
+            if internal_end - internal_start > max_utterance_sec:
+                internal_end = internal_start + max_utterance_sec
+            if internal_end > max_internal_sec + tolerance:
+                internal_end = max_internal_sec
+            if internal_end < internal_start:
+                internal_end = internal_start + 5
+            new_start = internal_start + offset_sec
+            new_end = internal_end + offset_sec
+            # Absolute-time clamp: if audio_duration provided, no timestamp may
+            # exceed it. The 30s chunk-end tolerance can let Gemini hallucinations
+            # leak past the file's actual length; this is the safety net.
+            if audio_duration_sec > 0:
+                if new_start >= audio_duration_sec:
+                    continue  # turn starts at/past audio end — pure hallucination
+                if new_end > audio_duration_sec:
+                    new_end = audio_duration_sec
+                if new_end < new_start:
+                    new_end = min(new_start + 5, audio_duration_sec)
+                    if new_end <= new_start:
+                        continue  # no audio room left — drop
+            new_line = _TIMESTAMP_RE.sub(
+                f"[{_fmt_time(new_start)} - {_fmt_time(new_end)}]", line, count=1
+            )
+            out_lines.append(new_line)
+        elif line.startswith("[") and "]" not in line[:80]:
+            # Opens like a turn `[HH:MM:SS -` but never closes `]` — Gemini garbage.
+            # (Seen: `[00:25:52 - SPEAKER_0: ...` with no closing bracket.)
             continue
-        internal_start = _parse_time(m.group(1))
-        if internal_start > max_internal_sec + tolerance:
-            continue  # hallucinated past chunk end — drop
-        internal_end = _parse_time(m.group(2))
-        new_start = internal_start + offset_sec
-        new_end = internal_end + offset_sec
-        new_line = _TIMESTAMP_RE.sub(
-            f"[{_fmt_time(new_start)} - {_fmt_time(new_end)}]", line, count=1
-        )
-        out_lines.append(new_line)
+        elif _META_LINE_RE.match(line):
+            # Gemini compliance preamble or `（注：...）` meta-commentary — not transcript.
+            continue
+        else:
+            # Non-turn structural line. Shift any embedded chunk-relative timestamps
+            # so silence markers / summary lines come out with absolute times.
+            shifted = _offset_timestamps(line, offset_sec) if _TIMESTAMP_RE.search(line) else line
+            out_lines.append(shifted)
     return "\n".join(out_lines)
 
 
@@ -494,31 +556,51 @@ def _apply_pyannote_timeline(transcript: str, timeline) -> str:
 
 
 def _join_chunks_dropping_overlap(chunk_records) -> str:
-    """Concatenate chunk texts. For chunks 1..N, drop turn lines that fall in
-    the overlap region (start < previous chunk's end_abs) — those are already
-    in the previous chunk's output. Non-turn lines (preambles, blanks) in the
-    overlap region are dropped too.
+    """Collect all turn lines across chunks, drop overlap-region duplicates,
+    then sort chronologically.
+
+    For each chunk k: keep turns whose start >= chunk_{k-1}.end_abs (chunk 0
+    has no prev → keep all). This per-turn filter is robust to Gemini emitting
+    chunk-internal turns out of chronological order, which the previous
+    slice-from-first-past-overlap approach mis-handled.
+
+    Non-turn lines (silence markers, preambles, meta-commentary) are dropped —
+    upstream _offset_and_filter_timestamps already stripped the legitimate
+    Gemini-meta lines; what's left is noise.
     """
-    parts = []
+    all_turns = []
     for k, rec in enumerate(chunk_records):
         if "parsed" not in rec:
             rec["parsed"] = _parse_diarized_lines(rec["text"])
-        if k == 0:
-            parts.append("\n".join(t["raw"] for t in rec["parsed"]))
-            continue
-        prev_end = chunk_records[k - 1]["end_abs"]
-        kept = []
-        # Find the first turn that's past the overlap; from there, keep everything
-        first_past_overlap = None
-        for i, t in enumerate(rec["parsed"]):
+        prev_end = chunk_records[k - 1]["end_abs"] if k > 0 else 0.0
+        for t in rec["parsed"]:
             if t["is_turn"] and t["start"] >= prev_end:
-                first_past_overlap = i
-                break
-        if first_past_overlap is None:
-            continue  # whole chunk is overlap (shouldn't happen)
-        kept = [t["raw"] for t in rec["parsed"][first_past_overlap:]]
-        parts.append("\n".join(kept))
-    return "\n\n".join(parts)
+                all_turns.append(t)
+    all_turns.sort(key=lambda t: t["start"])
+    return "\n".join(t["raw"] for t in all_turns)
+
+
+def _detect_speech_end(audio_path: Path) -> float:
+    """Return the timestamp at which actual speech ends.
+
+    Voice Memos / m4a files often pad recordings with trailing silence past the
+    last spoken word. Gemini "transcribes" that silence into fabricated dialogue
+    with timestamps like `[02:02:50 - 02:02:55]` even though no one is talking.
+    Detect the start of the trailing-silence segment (the silence that runs
+    contiguously to file end) and treat THAT as the effective audio end.
+
+    Falls back to file duration if no trailing silence is detected.
+    """
+    file_dur = get_audio_duration(audio_path)
+    silences = _detect_silence(audio_path, noise_db=-30, min_duration=2.0)
+    if not silences:
+        return file_dur
+    # Find silences whose end touches file end (within 2s)
+    trailing = [(s, e) for s, e in silences if e >= file_dur - 2.0]
+    if not trailing:
+        return file_dur
+    # Speech ended at the start of the latest trailing-silence segment
+    return min(s for s, _ in trailing)
 
 
 def _detect_silence(audio_path: Path, noise_db: int = -30, min_duration: float = 0.5):
@@ -632,7 +714,13 @@ def _chunk_audio_at_silence(audio_path: Path):
 # ---------------------------------------------------------------------------
 
 def _gemini_transcribe_one(client, audio_path: Path) -> str:
-    """Upload + transcribe a single audio file via Gemini. Returns plain text."""
+    """Upload + transcribe a single audio file via Gemini. Returns plain text.
+
+    Retries `generate_content` on transient errors (503 UNAVAILABLE, 429
+    RESOURCE_EXHAUSTED, 5xx) with exponential backoff — Gemini hits demand
+    spikes occasionally and one chunk failing would otherwise abort the
+    entire multi-chunk pipeline.
+    """
     uploaded = client.files.upload(file=str(audio_path))
     while uploaded.state.name == "PROCESSING":
         time.sleep(2)
@@ -641,15 +729,36 @@ def _gemini_transcribe_one(client, audio_path: Path) -> str:
         print(f"  Gemini file processing failed: {uploaded.state}")
         return ""
 
-    resp = client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=[uploaded, TRANSCRIBE_PROMPT],
-        config={
-            "thinking_config": {"thinking_level": "minimal"},
-            "max_output_tokens": 65536,
-        },
-    )
-    text = (resp.text or "").strip()
+    max_attempts = 4
+    transient_codes = {429, 500, 502, 503, 504}
+    transient_status = {"UNAVAILABLE", "RESOURCE_EXHAUSTED", "INTERNAL", "DEADLINE_EXCEEDED"}
+    resp = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            resp = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=[uploaded, TRANSCRIBE_PROMPT],
+                config={
+                    "thinking_config": {"thinking_level": "minimal"},
+                    "max_output_tokens": 65536,
+                },
+            )
+            break
+        except Exception as e:
+            msg = str(e)
+            code = getattr(e, "code", None) or getattr(e, "status_code", None)
+            status_match = any(s in msg.upper() for s in transient_status)
+            code_match = code in transient_codes if code else False
+            generic_5xx = " 5" in msg and ("503" in msg or "502" in msg or "504" in msg or "500" in msg)
+            is_transient = status_match or code_match or generic_5xx
+            if is_transient and attempt < max_attempts:
+                backoff = 2 ** attempt  # 2s, 4s, 8s
+                print(f"  [retry] transient Gemini error (attempt {attempt}/{max_attempts-1}): {msg[:120]} — backing off {backoff}s")
+                time.sleep(backoff)
+                continue
+            raise
+
+    text = (resp.text or "").strip() if resp else ""
     try:
         finish = resp.candidates[0].finish_reason
         if finish and str(finish).upper().endswith("MAX_TOKENS"):
@@ -678,6 +787,14 @@ def _gemini_transcribe(client, audio_path: Path) -> str:
       Fragile (~60-70% reliable on long audio); kept as a no-deps fallback.
     """
     duration = get_audio_duration(audio_path)
+    # Effective speech end: where trailing silence starts. We clamp transcribed
+    # timestamps to this so Gemini's hallucinated transcripts of trailing
+    # silence (`[02:02:50 - 02:02:55] SPEAKER_01: 我不知道...` after audio
+    # actually stopped speaking at 01:48) get dropped.
+    speech_end = _detect_speech_end(audio_path)
+    if speech_end < duration - 5:
+        print(f"  [info] speech ends at {_fmt_time(speech_end)} (file {_fmt_time(duration)}); "
+              f"clamping output past speech-end")
 
     # Kick off pyannote in a background thread if available — runs concurrently
     # with Gemini chunk transcription, saving wall time.
@@ -704,7 +821,9 @@ def _gemini_transcribe(client, audio_path: Path) -> str:
                 t0 = time.time()
                 text = _gemini_transcribe_one(client, chunk_path)
                 print(f"    chunk {i+1}/{n} DONE  ({time.time()-t0:.0f}s, {len(text)} chars)")
-                return i, _offset_and_filter_timestamps(text, offset, chunk_dur)
+                return i, _offset_and_filter_timestamps(
+                    text, offset, chunk_dur, audio_duration_sec=speech_end
+                )
 
             results = [None] * n
             with ThreadPoolExecutor(max_workers=workers) as pool:
