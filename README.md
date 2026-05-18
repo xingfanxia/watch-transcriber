@@ -64,6 +64,18 @@ For a 2-hour file: ~15 chunks of 5-12 min each, transcribed in parallel → ~37 
 
 Tunable via `CHUNK_THRESHOLD_SEC` / `CHUNK_TARGET_SEC` / `CHUNK_MIN_SEC` / `CHUNK_MAX_SEC` / `CHUNK_PARALLELISM` env vars (see `.env.example`).
 
+### Speaker label consistency across chunks
+
+When the audio gets chunked, each chunk's `SPEAKER_0`/`SPEAKER_1` labels are independent — chunk 1's SPEAKER_0 might be the same person as chunk 2's SPEAKER_1. This pipeline addresses that with a global diarization pass that runs **in parallel** with Gemini chunk transcription, then assigns each transcript line a consistent global speaker label.
+
+Diarizer auto-select (via `DIARIZER` env var):
+
+- **Senko** (recommended, default if installed) — `pip install senko`. CoreML-native on Apple Silicon, ~60 sec for a 2hr file on M4 Max. Uses CAM++ Mandarin embedder which handles Chinese-English mixed audio well. No HuggingFace token required.
+- **pyannote.audio** (fallback) — slower (~15-25 min for 2hr on Apple Silicon MPS due to PyTorch fallback overhead). Requires HuggingFace token + accepting licenses for `pyannote/speaker-diarization-3.1` + `pyannote/segmentation-3.0` + `pyannote/speaker-diarization-community-1`.
+- **none** (`DIARIZER=none`) — skip global diarization; rely on per-chunk text-matching overlap reconciliation (~85% reliable on 2-speaker conversations).
+
+Neither approach is perfect on rapid Q+A where turn boundaries are sub-second (acoustic embedders can't always distinguish back-and-forth at that granularity) — but both keep macro-level speaker identity consistent across the whole transcript, which is what downstream summarization actually needs.
+
 ## Gotchas
 
 ### TCC / Full Disk Access

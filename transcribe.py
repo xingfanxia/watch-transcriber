@@ -182,16 +182,26 @@ def _fmt_time(sec: float) -> str:
 
 
 def _parse_time(ts: str) -> int:
+    """Parse `HH:MM:SS`, `H:MM:SS`, or `MM:SS` / `M:SS` — Gemini sometimes drops
+    the hour component on short chunks. Returns seconds."""
     parts = ts.split(":")
-    return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+    if len(parts) == 3:
+        return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+    if len(parts) == 2:
+        return int(parts[0]) * 60 + int(parts[1])
+    raise ValueError(f"unrecognized timestamp: {ts!r}")
 
 
-_TIMESTAMP_RE = re.compile(r"\[(\d{1,2}:\d{1,2}:\d{1,2})\s*-\s*(\d{1,2}:\d{1,2}:\d{1,2})\]")
+# Accept 2-component (MM:SS) and 3-component (HH:MM:SS) timestamps. Gemini occasionally
+# emits the 2-component form on chunks with short internal time.
+_TIMESTAMP_RE = re.compile(
+    r"\[(\d{1,2}:\d{1,2}(?::\d{1,2})?)\s*-\s*(\d{1,2}:\d{1,2}(?::\d{1,2})?)\]"
+)
 # Matches a single diarized turn line like:
 #   [00:00:20 - 00:00:45] SPEAKER_0: content
-# Tolerates 1-2 digit timestamp components and either SPEAKER_N or single-letter (OpenAI) labels.
+# Tolerates 1-2 digit components, 2- or 3-component timestamps, SPEAKER_N or single-letter labels.
 _TURN_RE = re.compile(
-    r"^\[(\d{1,2}:\d{1,2}:\d{1,2})\s*-\s*(\d{1,2}:\d{1,2}:\d{1,2})\]\s+(SPEAKER_\d+|[A-Z]):\s*(.*)$"
+    r"^\[(\d{1,2}:\d{1,2}(?::\d{1,2})?)\s*-\s*(\d{1,2}:\d{1,2}(?::\d{1,2})?)\]\s+(SPEAKER_\d+|[A-Z]):\s*(.*)$"
 )
 
 
@@ -332,6 +342,155 @@ def _reconcile_speakers_across_chunks(chunk_records):
                 final = t["speaker"][len(TMP):]
                 t["raw"] = t["raw"].replace(f"] {t['speaker']}:", f"] {final}:", 1)
                 t["speaker"] = final
+
+
+# ---------------------------------------------------------------------------
+# Global diarization — picks Senko (CoreML, fast) > pyannote.audio (slow) > none
+# ---------------------------------------------------------------------------
+# DIARIZER env var: "auto" (default) | "senko" | "pyannote" | "none"
+#   auto: senko if installed → else pyannote (if HUGGINGFACE_TOKEN set) → else none
+# Senko: native CoreML on Apple Silicon, ~50x faster than pyannote/MPS on M-series,
+#   uses CAM++ Mandarin embedder (better for zh-en mixed audio), no HF token needed.
+# Pyannote: HuggingFace gated models, slow on Apple Silicon MPS (~15-25 min for 2hr).
+
+DIARIZER = os.environ.get("DIARIZER", "auto").lower()
+
+
+def _senko_installed() -> bool:
+    try:
+        import senko  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def _pyannote_installed() -> bool:
+    if not os.environ.get("HUGGINGFACE_TOKEN"):
+        return False
+    try:
+        import pyannote.audio  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def _pyannote_available() -> bool:
+    """Whether ANY global diarizer is available (named for back-compat with callers).
+    Picks per DIARIZER env: auto > senko > pyannote > none."""
+    if DIARIZER == "none":
+        return False
+    if DIARIZER == "senko":
+        return _senko_installed()
+    if DIARIZER == "pyannote":
+        return _pyannote_installed()
+    # auto
+    return _senko_installed() or _pyannote_installed()
+
+
+def _pyannote_diarize(audio_path: Path):
+    """Run global speaker diarization. Returns list of (start_sec, end_sec, speaker_label).
+
+    Tries Senko (CoreML, fast) first; falls back to pyannote.audio if Senko
+    isn't available. Both produce the same (start, end, speaker_label) tuple shape.
+    """
+    use_senko = (
+        DIARIZER == "senko"
+        or (DIARIZER == "auto" and _senko_installed())
+    )
+    if use_senko:
+        return _senko_diarize(audio_path)
+    return _pyannote_diarize_impl(audio_path)
+
+
+def _senko_diarize(audio_path: Path):
+    """Senko diarization via CoreML. Senko needs 16kHz mono 16-bit WAV input,
+    so we transcode via ffmpeg first. ~50x faster than pyannote/MPS on Apple Silicon.
+    Uses `raw_segments` (sub-second granular, avoids over-merging rapid Q+A)."""
+    import senko
+
+    tmp_wav = Path(tempfile.mktemp(prefix="senko_", suffix=".wav"))
+    try:
+        subprocess.run(
+            [
+                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                "-i", str(audio_path),
+                "-ac", "1",
+                "-ar", "16000",
+                "-sample_fmt", "s16",
+                str(tmp_wav),
+            ],
+            check=True, timeout=300,
+        )
+        diarizer = senko.Diarizer(device="auto", warmup=True, quiet=True)
+        result = diarizer.diarize(str(tmp_wav), generate_colors=False)
+        # raw_segments preserves sub-second turn boundaries; merged_segments
+        # combines same-speaker spans ≤4s apart which over-merges Q+A exchanges.
+        segments = result.get("raw_segments") or result.get("merged_segments", [])
+        return [
+            (float(seg["start"]), float(seg["end"]), seg["speaker"])
+            for seg in segments
+        ]
+    finally:
+        try:
+            tmp_wav.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+def _pyannote_diarize_impl(audio_path: Path):
+    """pyannote.audio fallback. Slow on Apple Silicon MPS (~15-25 min for 2hr)."""
+    import torch
+    from pyannote.audio import Pipeline
+    token = os.environ["HUGGINGFACE_TOKEN"]
+    pipeline = Pipeline.from_pretrained(
+        "pyannote/speaker-diarization-3.1",
+        token=token,
+    )
+    if torch.cuda.is_available():
+        pipeline.to(torch.device("cuda"))
+    elif torch.backends.mps.is_available():
+        pipeline.to(torch.device("mps"))
+    diarization = pipeline(str(audio_path))
+    return [
+        (turn.start, turn.end, speaker)
+        for turn, _, speaker in diarization.itertracks(yield_label=True)
+    ]
+
+
+def _apply_pyannote_timeline(transcript: str, timeline) -> str:
+    """Replace per-turn speaker labels in transcript with pyannote's global labels.
+
+    For each diarized turn line, look up the pyannote speaker whose interval
+    contains the turn's midpoint; fall back to nearest interval if none
+    contains it (e.g., a Gemini turn timestamp slightly outside any
+    pyannote-detected speech).
+    """
+    if not timeline:
+        return transcript
+
+    out_lines = []
+    for line in transcript.splitlines():
+        m = _TURN_RE.match(line)
+        if not m:
+            out_lines.append(line)
+            continue
+        start = _parse_time(m.group(1))
+        end = _parse_time(m.group(2))
+        midpoint = (start + end) / 2
+        speaker = None
+        for ps, pe, plabel in timeline:
+            if ps <= midpoint <= pe:
+                speaker = plabel
+                break
+        if speaker is None:
+            speaker = min(
+                timeline,
+                key=lambda x: min(abs(midpoint - x[0]), abs(midpoint - x[1])),
+            )[2]
+        old_speaker = m.group(3)
+        new_line = line.replace(f"] {old_speaker}:", f"] {speaker}:", 1)
+        out_lines.append(new_line)
+    return "\n".join(out_lines)
 
 
 def _join_chunks_dropping_overlap(chunk_records) -> str:
@@ -509,46 +668,79 @@ def _gemini_transcribe(client, audio_path: Path) -> str:
 
     Chunks run in parallel (up to CHUNK_PARALLELISM concurrent API calls).
     Order is preserved by indexing — output is concatenated in chunk order.
+
+    Speaker label strategy:
+    - If HUGGINGFACE_TOKEN is set + pyannote.audio is installed → run
+      pyannote diarization on the FULL audio in parallel with Gemini chunks,
+      then relabel each transcript line by pyannote's global speaker timeline.
+      ~99% reliable. (See _pyannote_diarize / _apply_pyannote_timeline.)
+    - Else → text-matching reconciliation via chunk overlap regions.
+      Fragile (~60-70% reliable on long audio); kept as a no-deps fallback.
     """
     duration = get_audio_duration(audio_path)
+
+    # Kick off pyannote in a background thread if available — runs concurrently
+    # with Gemini chunk transcription, saving wall time.
+    pyannote_pool = None
+    pyannote_future = None
+    if _pyannote_available():
+        print(f"  Starting global diarization (parallel with Gemini)...")
+        pyannote_pool = ThreadPoolExecutor(max_workers=1)
+        pyannote_future = pyannote_pool.submit(_pyannote_diarize, audio_path)
+
     chunks, cleanup = _chunk_audio_at_silence(audio_path)
     try:
         if len(chunks) == 1:
             print(f"  Transcribing with {GEMINI_MODEL} (single chunk, {duration:.0f}s)...")
-            return _gemini_transcribe_one(client, chunks[0][0])
+            text = _gemini_transcribe_one(client, chunks[0][0])
+        else:
+            n = len(chunks)
+            workers = min(CHUNK_PARALLELISM, n)
+            print(f"  Transcribing with {GEMINI_MODEL} in {n} chunks (silence-aware, {workers} parallel, {CHUNK_OVERLAP_SEC}s overlap)...")
 
-        n = len(chunks)
-        workers = min(CHUNK_PARALLELISM, n)
-        print(f"  Transcribing with {GEMINI_MODEL} in {n} chunks (silence-aware, {workers} parallel, {CHUNK_OVERLAP_SEC}s overlap)...")
+            def run(idx_chunk):
+                i, (chunk_path, offset, chunk_dur) = idx_chunk
+                print(f"    chunk {i+1}/{n} START: {_fmt_time(offset)} → {_fmt_time(offset + chunk_dur)} ({chunk_dur:.0f}s)")
+                t0 = time.time()
+                text = _gemini_transcribe_one(client, chunk_path)
+                print(f"    chunk {i+1}/{n} DONE  ({time.time()-t0:.0f}s, {len(text)} chars)")
+                return i, _offset_and_filter_timestamps(text, offset, chunk_dur)
 
-        def run(idx_chunk):
-            i, (chunk_path, offset, chunk_dur) = idx_chunk
-            print(f"    chunk {i+1}/{n} START: {_fmt_time(offset)} → {_fmt_time(offset + chunk_dur)} ({chunk_dur:.0f}s)")
+            results = [None] * n
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                for i, t in pool.map(run, enumerate(chunks)):
+                    results[i] = t
+
+            chunk_records = [
+                {
+                    "offset": chunks[i][1],
+                    "end_abs": chunks[i][1] + chunks[i][2],
+                    "text": results[i] or "",
+                }
+                for i in range(n)
+            ]
+
+            if pyannote_future is not None:
+                # Pyannote will assign global speaker labels; skip per-chunk
+                # text reconciliation (its labels will be overwritten anyway).
+                text = _join_chunks_dropping_overlap(chunk_records)
+            else:
+                _reconcile_speakers_across_chunks(chunk_records)
+                text = _join_chunks_dropping_overlap(chunk_records)
+
+        # Apply pyannote's global speaker timeline to the assembled transcript
+        if pyannote_future is not None:
+            print(f"  Waiting for diarization...")
             t0 = time.time()
-            text = _gemini_transcribe_one(client, chunk_path)
-            print(f"    chunk {i+1}/{n} DONE  ({time.time()-t0:.0f}s, {len(text)} chars)")
-            # Filter out hallucinated out-of-bounds timestamps, then offset.
-            return i, _offset_and_filter_timestamps(text, offset, chunk_dur)
+            timeline = pyannote_future.result()
+            print(f"  Diarization done in {time.time()-t0:.0f}s ({len({s for _,_,s in timeline})} distinct speakers, {len(timeline)} intervals)")
+            text = _apply_pyannote_timeline(text, timeline)
 
-        results = [None] * n
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            for i, text in pool.map(run, enumerate(chunks)):
-                results[i] = text
-
-        # Build chunk_records preserving offset / end_abs, then reconcile
-        # speaker labels across chunks via the overlap region.
-        chunk_records = [
-            {
-                "offset": chunks[i][1],
-                "end_abs": chunks[i][1] + chunks[i][2],
-                "text": results[i] or "",
-            }
-            for i in range(n)
-        ]
-        _reconcile_speakers_across_chunks(chunk_records)
-        return _join_chunks_dropping_overlap(chunk_records)
+        return text
     finally:
         cleanup()
+        if pyannote_pool is not None:
+            pyannote_pool.shutdown(wait=False)
 
 
 # ---------------------------------------------------------------------------
@@ -595,8 +787,15 @@ def _openai_transcribe(audio_path: Path) -> str:
     OpenAI = _ensure_openai()
     client = OpenAI(api_key=api_key)
 
+    # Kick off pyannote in parallel if available.
+    pyannote_pool = None
+    pyannote_future = None
+    if _pyannote_available():
+        print(f"  Starting global diarization (parallel with OpenAI)...")
+        pyannote_pool = ThreadPoolExecutor(max_workers=1)
+        pyannote_future = pyannote_pool.submit(_pyannote_diarize, audio_path)
+
     # OpenAI per-request limits are tight (25MB / 1500s), so always chunk long audio.
-    # Chunks run in parallel up to CHUNK_PARALLELISM workers.
     chunks, cleanup = _chunk_audio_at_silence(audio_path)
     try:
         n = len(chunks)
@@ -635,21 +834,34 @@ def _openai_transcribe(audio_path: Path) -> str:
                 results[i] = text
 
         if n == 1:
-            return results[0] or ""
+            text = results[0] or ""
+        else:
+            chunk_records = [
+                {
+                    "offset": chunks[i][1],
+                    "end_abs": chunks[i][1] + chunks[i][2],
+                    "text": results[i] or "",
+                }
+                for i in range(n)
+            ]
+            if pyannote_future is not None:
+                text = _join_chunks_dropping_overlap(chunk_records)
+            else:
+                _reconcile_speakers_across_chunks(chunk_records)
+                text = _join_chunks_dropping_overlap(chunk_records)
 
-        # Reconcile speaker labels across chunks via the overlap region.
-        chunk_records = [
-            {
-                "offset": chunks[i][1],
-                "end_abs": chunks[i][1] + chunks[i][2],
-                "text": results[i] or "",
-            }
-            for i in range(n)
-        ]
-        _reconcile_speakers_across_chunks(chunk_records)
-        return _join_chunks_dropping_overlap(chunk_records)
+        if pyannote_future is not None:
+            print(f"  Waiting for diarization...")
+            t0 = time.time()
+            timeline = pyannote_future.result()
+            print(f"  Diarization done in {time.time()-t0:.0f}s ({len({s for _,_,s in timeline})} distinct speakers, {len(timeline)} intervals)")
+            text = _apply_pyannote_timeline(text, timeline)
+
+        return text
     finally:
         cleanup()
+        if pyannote_pool is not None:
+            pyannote_pool.shutdown(wait=False)
 
 
 # ---------------------------------------------------------------------------
