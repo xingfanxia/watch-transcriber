@@ -9,10 +9,13 @@ multimodal call, then delivers structured notes to configurable targets.
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
@@ -51,6 +54,24 @@ STATE_FILE = STATE_DIR / "processed.json"
 
 # Gemini model
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
+
+# Skip recordings shorter than this (seconds). Voice Memos sometimes captures
+# brief accidental taps; transcribing them wastes API quota.
+MIN_DURATION_SECONDS = int(os.environ.get("MIN_DURATION_SECONDS", "60"))
+
+# Provider selection: "gemini" (default) or "openai" (gpt-4o-transcribe-diarize)
+STT_PROVIDER = os.environ.get("STT_PROVIDER", "gemini").lower()
+
+# Chunking thresholds (used by both providers).
+# Gemini 3 Flash loses coherence on >15min audio (loops, fabricated timestamps).
+# OpenAI gpt-4o-transcribe-diarize has 25MB / 1500s per-request limits.
+# Target chunk size sits comfortably under both, with silence-aware boundaries
+# so we don't cut mid-sentence.
+CHUNK_THRESHOLD_SEC = int(os.environ.get("CHUNK_THRESHOLD_SEC", "900"))   # only chunk if audio > 15 min
+CHUNK_TARGET_SEC = int(os.environ.get("CHUNK_TARGET_SEC", "480"))          # aim for ~8 min chunks
+CHUNK_MIN_SEC = int(os.environ.get("CHUNK_MIN_SEC", "300"))                # but at least 5 min
+CHUNK_MAX_SEC = int(os.environ.get("CHUNK_MAX_SEC", "720"))                # and at most 12 min
+CHUNK_PARALLELISM = int(os.environ.get("CHUNK_PARALLELISM", "8"))          # concurrent chunk API calls
 
 
 def load_state() -> set[str]:
@@ -95,6 +116,24 @@ def find_recordings_by_date(date_str: str) -> list[Path]:
     return sorted(matches, key=lambda p: p.stat().st_mtime)
 
 
+def get_audio_duration(audio_path: Path):
+    """Return audio duration in seconds via macOS `afinfo`. None if unparseable."""
+    try:
+        out = subprocess.run(
+            ["afinfo", str(audio_path)],
+            capture_output=True, text=True, timeout=10,
+        ).stdout
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    for line in out.splitlines():
+        if "estimated duration:" in line:
+            try:
+                return float(line.split(":", 1)[1].strip().split()[0])
+            except (ValueError, IndexError):
+                return None
+    return None
+
+
 def ensure_genai():
     """Import google-genai, installing into project venv if needed."""
     try:
@@ -126,84 +165,447 @@ def ensure_genai():
         sys.exit(1)
 
 
-def transcribe_and_summarize(audio_path: Path) -> dict:
-    """Single Gemini call: audio → summary + key points + action items + transcript."""
-    genai = ensure_genai()
+# ---------------------------------------------------------------------------
+# Audio chunking — silence-aware, used by both Gemini and OpenAI providers
+# ---------------------------------------------------------------------------
 
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        print("GEMINI_API_KEY not set")
-        sys.exit(1)
+def _fmt_time(sec: float) -> str:
+    s = int(sec)
+    return f"{s // 3600:02d}:{(s % 3600) // 60:02d}:{s % 60:02d}"
 
-    client = genai.Client(api_key=api_key)
 
-    # Upload audio to Gemini Files API
-    print("  Uploading to Gemini Files API...")
+def _parse_time(ts: str) -> int:
+    parts = ts.split(":")
+    return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+
+
+_TIMESTAMP_RE = re.compile(r"\[(\d{1,2}:\d{1,2}:\d{1,2})\s*-\s*(\d{1,2}:\d{1,2}:\d{1,2})\]")
+
+
+def _offset_timestamps(transcript: str, offset_sec: float) -> str:
+    """Shift every `[HH:MM:SS - HH:MM:SS]` timestamp by offset_sec."""
+
+    def replace(m):
+        start = _parse_time(m.group(1)) + offset_sec
+        end = _parse_time(m.group(2)) + offset_sec
+        return f"[{_fmt_time(start)} - {_fmt_time(end)}]"
+
+    return _TIMESTAMP_RE.sub(replace, transcript)
+
+
+def _detect_silence(audio_path: Path, noise_db: int = -30, min_duration: float = 0.5):
+    """Run ffmpeg silencedetect; return list of (start_sec, end_sec)."""
+    try:
+        result = subprocess.run(
+            [
+                "ffmpeg", "-hide_banner", "-i", str(audio_path),
+                "-af", f"silencedetect=noise={noise_db}dB:d={min_duration}",
+                "-f", "null", "-",
+            ],
+            capture_output=True, text=True, timeout=180,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return []
+    intervals = []
+    pending_start = None
+    for line in result.stderr.splitlines():
+        if "silence_start:" in line:
+            try:
+                pending_start = float(line.split("silence_start:")[1].strip())
+            except (ValueError, IndexError):
+                pending_start = None
+        elif "silence_end:" in line and pending_start is not None:
+            try:
+                end_part = line.split("silence_end:")[1].split("|")[0].strip()
+                intervals.append((pending_start, float(end_part)))
+            except (ValueError, IndexError):
+                pass
+            pending_start = None
+    return intervals
+
+
+def _pick_split_points(total_sec: float, silences):
+    """Pick split timestamps near each CHUNK_TARGET_SEC boundary, preferring
+    a silence midpoint within [CHUNK_MIN_SEC, CHUNK_MAX_SEC] of the previous split.
+    """
+    splits = [0.0]
+    current = 0.0
+    while current + CHUNK_MAX_SEC < total_sec:
+        target = current + CHUNK_TARGET_SEC
+        best = None
+        for s, e in silences:
+            mid = (s + e) / 2
+            if current + CHUNK_MIN_SEC <= mid <= current + CHUNK_MAX_SEC:
+                if best is None or abs(mid - target) < abs(best - target):
+                    best = mid
+        if best is None:
+            best = target  # no silence found — hard split
+        splits.append(best)
+        current = best
+    splits.append(total_sec)
+    return splits
+
+
+def _chunk_audio_at_silence(audio_path: Path):
+    """Split audio into chunks at silence near each target boundary.
+
+    Returns list of (chunk_path, start_offset_sec, duration_sec).
+    Caller must invoke cleanup() on the returned helper to remove temp files.
+    """
+    total = get_audio_duration(audio_path)
+    if total is None or total <= CHUNK_THRESHOLD_SEC:
+        return [(audio_path, 0.0, total or 0.0)], lambda: None
+
+    silences = _detect_silence(audio_path)
+    splits = _pick_split_points(total, silences)
+
+    tmp_dir = Path(tempfile.mkdtemp(prefix="watch_chunk_"))
+    chunks = []
+    for i in range(len(splits) - 1):
+        start, end = splits[i], splits[i + 1]
+        chunk_path = tmp_dir / f"chunk_{i:02d}.m4a"
+        try:
+            subprocess.run(
+                [
+                    "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                    "-ss", str(start), "-to", str(end),
+                    "-i", str(audio_path),
+                    "-c", "copy",
+                    str(chunk_path),
+                ],
+                check=True, timeout=180,
+            )
+            chunks.append((chunk_path, start, end - start))
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+            print(f"  [chunk] failed to extract chunk {i} ({start:.0f}-{end:.0f}s): {e}")
+
+    def cleanup():
+        for cp, _, _ in chunks:
+            try:
+                cp.unlink(missing_ok=True)
+            except Exception:
+                pass
+        try:
+            tmp_dir.rmdir()
+        except Exception:
+            pass
+
+    return chunks, cleanup
+
+
+# ---------------------------------------------------------------------------
+# Provider: Gemini
+# ---------------------------------------------------------------------------
+
+def _gemini_transcribe_one(client, audio_path: Path) -> str:
+    """Upload + transcribe a single audio file via Gemini. Returns plain text."""
     uploaded = client.files.upload(file=str(audio_path))
     while uploaded.state.name == "PROCESSING":
         time.sleep(2)
         uploaded = client.files.get(name=uploaded.name)
     if uploaded.state.name == "FAILED":
-        print(f"  File processing failed: {uploaded.state}")
-        return {}
+        print(f"  Gemini file processing failed: {uploaded.state}")
+        return ""
 
-    # Single multimodal prompt: transcribe + summarize (bilingual)
-    prompt = """Listen to this audio and provide the following:
-
-1. **English analysis:**
-   - summary_en: 2-3 sentence summary in English
-   - key_points_en: 3-7 key points in English
-
-2. **Chinese analysis:**
-   - summary_zh: 2-3 sentence summary in Chinese (中文摘要)
-   - key_points_zh: 3-7 key points in Chinese (中文要点)
-
-3. **Action items** (bilingual if the audio is mixed):
-   - action_items: any todos or action items mentioned (empty list if none)
-
-4. **Full transcript** with speaker diarization:
-   - Identify speakers as SPEAKER_0, SPEAKER_1, etc.
-   - Use timestamps: [HH:MM:SS - HH:MM:SS] SPEAKER_X: content
-   - Keep natural sentence boundaries, proper punctuation
-   - IMPORTANT: transcribe verbatim in the ORIGINAL language(s) spoken. Do NOT translate the transcript.
-
-Respond in this EXACT JSON format:
-{
-  "summary_en": "English summary here",
-  "summary_zh": "中文摘要",
-  "key_points_en": ["point 1", "point 2"],
-  "key_points_zh": ["要点一", "要点二"],
-  "action_items": ["todo 1", "todo 2"],
-  "transcript": "full transcript with timestamps and speakers in original language"
-}"""
-
-    print(f"  Transcribing + summarizing with {GEMINI_MODEL}...")
-    response = client.models.generate_content(
+    resp = client.models.generate_content(
         model=GEMINI_MODEL,
-        contents=[uploaded, prompt],
+        contents=[uploaded, TRANSCRIBE_PROMPT],
         config={
-            "temperature": 0.2,
-            "response_mime_type": "application/json",
+            "thinking_config": {"thinking_level": "minimal"},
+            "max_output_tokens": 65536,
         },
     )
-
-    # Clean up uploaded file
+    text = (resp.text or "").strip()
+    try:
+        finish = resp.candidates[0].finish_reason
+        if finish and str(finish).upper().endswith("MAX_TOKENS"):
+            print(f"  [warn] chunk may be truncated (finish_reason={finish})")
+    except (AttributeError, IndexError, TypeError):
+        pass
     try:
         client.files.delete(name=uploaded.name)
     except Exception:
         pass
+    return text
 
+
+def _gemini_transcribe(client, audio_path: Path) -> str:
+    """Transcribe via Gemini, chunking long audio at silence boundaries.
+
+    Chunks run in parallel (up to CHUNK_PARALLELISM concurrent API calls).
+    Order is preserved by indexing — output is concatenated in chunk order.
+    """
+    duration = get_audio_duration(audio_path)
+    chunks, cleanup = _chunk_audio_at_silence(audio_path)
     try:
-        return json.loads(response.text)
-    except (json.JSONDecodeError, AttributeError):
-        # Control characters in transcript can break JSON — try cleaning
-        import re
+        if len(chunks) == 1:
+            print(f"  Transcribing with {GEMINI_MODEL} (single chunk, {duration:.0f}s)...")
+            return _gemini_transcribe_one(client, chunks[0][0])
+
+        n = len(chunks)
+        workers = min(CHUNK_PARALLELISM, n)
+        print(f"  Transcribing with {GEMINI_MODEL} in {n} chunks (silence-aware, {workers} parallel)...")
+
+        def run(idx_chunk):
+            i, (chunk_path, offset, chunk_dur) = idx_chunk
+            print(f"    chunk {i+1}/{n} START: {_fmt_time(offset)} → {_fmt_time(offset + chunk_dur)} ({chunk_dur:.0f}s)")
+            t0 = time.time()
+            text = _gemini_transcribe_one(client, chunk_path)
+            print(f"    chunk {i+1}/{n} DONE  ({time.time()-t0:.0f}s, {len(text)} chars)")
+            return i, _offset_timestamps(text, offset)
+
+        results = [None] * n
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            for i, text in pool.map(run, enumerate(chunks)):
+                results[i] = text
+        return "\n\n".join(t for t in results if t)
+    finally:
+        cleanup()
+
+
+# ---------------------------------------------------------------------------
+# Provider: OpenAI gpt-4o-transcribe-diarize
+# ---------------------------------------------------------------------------
+
+def _ensure_openai():
+    try:
+        from openai import OpenAI
+        return OpenAI
+    except ImportError:
+        pass
+    venv_dir = SCRIPT_DIR / "venv"
+    pip = venv_dir / "bin" / "pip"
+    if pip.exists():
+        subprocess.run([str(pip), "install", "-q", "openai"], check=True)
+    try:
+        from openai import OpenAI
+        return OpenAI
+    except ImportError:
+        print("Failed to install openai. Run: pip install openai")
+        sys.exit(1)
+
+
+def _openai_transcribe(audio_path: Path) -> str:
+    """Transcribe via OpenAI gpt-4o-transcribe-diarize.
+
+    Always chunks to stay under OpenAI's 25MB / ~25min per-request limit;
+    converts the diarized_json segments into our standard
+    `[HH:MM:SS - HH:MM:SS] SPEAKER_X: content` format.
+    """
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        for fallback in [
+            Path.home() / ".claude/plugins/transcribe/.env",
+            Path.home() / ".claude/plugins/nanobanana/.env",
+        ]:
+            load_dotenv_simple(fallback)
+        api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        print("OPENAI_API_KEY not set")
+        return ""
+
+    OpenAI = _ensure_openai()
+    client = OpenAI(api_key=api_key)
+
+    # OpenAI per-request limits are tight (25MB / 1500s), so always chunk long audio.
+    # Chunks run in parallel up to CHUNK_PARALLELISM workers.
+    chunks, cleanup = _chunk_audio_at_silence(audio_path)
+    try:
+        n = len(chunks)
+        if n == 1:
+            print(f"  Transcribing with gpt-4o-transcribe-diarize (single chunk)...")
+        else:
+            workers = min(CHUNK_PARALLELISM, n)
+            print(f"  Transcribing with gpt-4o-transcribe-diarize in {n} chunks ({workers} parallel)...")
+
+        def run(idx_chunk):
+            i, (chunk_path, offset, chunk_dur) = idx_chunk
+            print(f"    chunk {i+1}/{n} START: {_fmt_time(offset)} → {_fmt_time(offset + chunk_dur)} ({chunk_dur:.0f}s)")
+            t0 = time.time()
+            with open(chunk_path, "rb") as f:
+                resp = client.audio.transcriptions.create(
+                    model="gpt-4o-transcribe-diarize",
+                    file=f,
+                    response_format="diarized_json",
+                    chunking_strategy="auto",
+                )
+            lines = []
+            for seg in getattr(resp, "segments", []) or []:
+                start = float(getattr(seg, "start", 0.0)) + offset
+                end = float(getattr(seg, "end", 0.0)) + offset
+                speaker = getattr(seg, "speaker", None) or "SPEAKER"
+                text = (getattr(seg, "text", "") or "").strip()
+                if text:
+                    lines.append(f"[{_fmt_time(start)} - {_fmt_time(end)}] {speaker}: {text}")
+            print(f"    chunk {i+1}/{n} DONE  ({time.time()-t0:.0f}s, {len(lines)} segments)")
+            return i, "\n".join(lines)
+
+        results = [None] * n
+        workers = min(CHUNK_PARALLELISM, n)
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            for i, text in pool.map(run, enumerate(chunks)):
+                results[i] = text
+        return "\n".join(t for t in results if t)
+    finally:
+        cleanup()
+
+
+# ---------------------------------------------------------------------------
+# Prompts
+# ---------------------------------------------------------------------------
+
+TRANSCRIBE_PROMPT = """请将这段音频转录成文字，并标注说话人。
+
+要求：
+1. 识别不同的说话人，用 SPEAKER_0、SPEAKER_1 等标签区分
+2. 每段对话用时间戳标注，格式：[HH:MM:SS - HH:MM:SS] SPEAKER_X: 内容
+3. **重要**：保持自然的句子边界，不要在句子中间断开
+4. 使用正确的标点符号（句号、逗号、问号等）
+5. 每个说话人的一段完整发言作为一个段落，不要把一句话拆成多行
+6. 逐字转录，保留口语特点但使用正确标点
+7. **保持源语言**：中文部分用中文，英文部分用英文，不要翻译
+
+示例输出格式：
+[00:00:20 - 00:00:45] SPEAKER_0: 大家好，欢迎收听本期节目。
+[00:00:45 - 00:01:05] SPEAKER_1: Hello, my name is Zhang San.
+"""
+
+SUMMARIZE_PROMPT = """You are analyzing a diarized transcript. Produce a JSON object with these fields:
+
+- summary_en: 2-3 sentence summary in English
+- summary_zh: 2-3 sentence summary in Chinese (中文摘要)
+- key_points_en: 3-7 key points in English
+- key_points_zh: 3-7 key points in Chinese (中文要点)
+- action_items: todos or follow-ups mentioned (bilingual list; empty list if none)
+
+Return ONLY valid JSON, no markdown fences:
+{
+  "summary_en": "...",
+  "summary_zh": "...",
+  "key_points_en": ["...", "..."],
+  "key_points_zh": ["...", "..."],
+  "action_items": ["...", "..."]
+}
+
+Transcript:
+"""
+
+
+def transcribe_and_summarize(audio_path: Path) -> dict:
+    """Two-stage pipeline:
+      1. Transcribe (provider = STT_PROVIDER, default "gemini")
+         - Gemini: chunk at silence boundaries when audio > CHUNK_THRESHOLD_SEC
+                   (Gemini 3 Flash loses coherence on long audio in a single call:
+                    loops, fabricates timestamps).
+         - OpenAI: always chunk to respect 25MB / 1500s per-request limits.
+      2. Summarize the transcript text via Gemini → JSON summary/key_points/action_items.
+    """
+    genai = ensure_genai()
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        print("GEMINI_API_KEY not set")
+        sys.exit(1)
+    client = genai.Client(api_key=api_key)
+
+    # Stage 1: transcribe
+    if STT_PROVIDER == "openai":
+        transcript = _openai_transcribe(audio_path)
+    else:
+        transcript = _gemini_transcribe(client, audio_path)
+
+    if not transcript:
+        print("  Transcription returned empty text")
+        return {"transcript": ""}
+
+    # Stage 2: summarize (text input → JSON output, no loop risk)
+    print(f"  Summarizing with {GEMINI_MODEL}...")
+    summary_resp = client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=[SUMMARIZE_PROMPT + transcript],
+        config={"response_mime_type": "application/json"},
+    )
+    result = _parse_gemini_json(summary_resp.text or "")
+    result["transcript"] = transcript
+    return result
+
+
+def _parse_gemini_json(text: str) -> dict:
+    """Parse Gemini's JSON response, with repair for known malformations.
+
+    Gemini 3 Flash Preview occasionally emits invalid JSON on long outputs:
+      - stray closing quote before `}` (e.g. `..."\n"\n}`)
+      - duplicated closing brace (`}\n}`)
+      - control characters inside transcript strings
+    """
+    import re
+
+    def _try_parse(s: str):
         try:
-            cleaned = re.sub(r'[\x00-\x1f\x7f]', ' ', response.text or "")
-            return json.loads(cleaned)
+            return json.loads(s)
         except (json.JSONDecodeError, AttributeError):
-            # Last resort: return raw text as transcript
-            return {"summary": "", "key_points": [], "action_items": [], "transcript": response.text or ""}
+            return None
+
+    # 1. Direct parse
+    parsed = _try_parse(text)
+    if parsed is not None:
+        return parsed
+
+    # 2. Strip markdown fences if present
+    stripped = re.sub(r"^```(?:json)?\s*", "", text.strip())
+    stripped = re.sub(r"\s*```$", "", stripped)
+    parsed = _try_parse(stripped)
+    if parsed is not None:
+        return parsed
+
+    # 3. Clean control chars (linebreaks inside strings, etc.)
+    cleaned = re.sub(r"[\x00-\x1f\x7f]", " ", stripped)
+    parsed = _try_parse(cleaned)
+    if parsed is not None:
+        return parsed
+
+    # 4. Repair: trim to first `{` and balanced closing `}`
+    repaired = stripped
+    start = repaired.find("{")
+    if start > 0:
+        repaired = repaired[start:]
+    # Drop orphan `"` between a string value and the closing brace
+    repaired = re.sub(r'"(\s*)"(\s*})', r'"\1\2', repaired)
+    # Drop duplicated closing braces at the very end
+    repaired = re.sub(r"}\s*}+\s*$", "}", repaired)
+    # Trailing commas
+    repaired = re.sub(r",(\s*[}\]])", r"\1", repaired)
+    # Truncate after the LAST balanced `}` so trailing garbage doesn't break parsing
+    depth = 0
+    last_balanced = -1
+    in_string = False
+    escape_next = False
+    for i, ch in enumerate(repaired):
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == "\\":
+            escape_next = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                last_balanced = i
+    if last_balanced > 0:
+        repaired = repaired[: last_balanced + 1]
+    parsed = _try_parse(repaired)
+    if parsed is not None:
+        return parsed
+
+    # 5. Last resort: surface raw text so the caller at least gets something
+    print("[parse] WARN: JSON repair failed; falling back to raw text in transcript field")
+    return {"summary": "", "key_points": [], "action_items": [], "transcript": text}
 
 
 def format_note(audio_path: Path, result: dict) -> dict:
@@ -292,6 +694,12 @@ def process_recording(audio_path: Path, dry_run: bool = False) -> bool:
     if audio_path.stat().st_size < 1000:
         print("Skipping: file too small (likely incomplete sync)")
         return False
+
+    # Skip recordings shorter than MIN_DURATION_SECONDS (default 60s)
+    duration = get_audio_duration(audio_path)
+    if duration is not None and duration < MIN_DURATION_SECONDS:
+        print(f"Skipping (too short): {duration:.1f}s < {MIN_DURATION_SECONDS}s threshold")
+        return True  # mark processed so we don't retry
 
     if dry_run:
         from deliveries import get_active_deliveries
