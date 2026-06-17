@@ -7,6 +7,7 @@ multimodal call, then delivers structured notes to configurable targets.
 """
 
 import argparse
+import html
 import json
 import os
 import re
@@ -1220,14 +1221,52 @@ def format_note(audio_path: Path, result: dict) -> dict:
             lines.append(f"- [ ] {item}")
         lines.append("")
 
+    # Fence the transcript: each "[ts] SPEAKER:" line is joined by a single \n,
+    # which markdown renderers (Feishu doc, .md viewers) collapse into one blob.
+    # A code block preserves line breaks so every timestamp range gets its own line.
     lines += [
         "---",
         "",
         "## Transcript",
         "",
+        "```",
         transcript.strip(),
+        "```",
         "",
     ]
+
+    # HTML rendering for Apple Notes. Markdown code fences don't survive Apple
+    # Notes' HTML body, so render the transcript as line-broken monospace here.
+    def _esc(x):
+        return html.escape(str(x))
+
+    html_parts = [
+        f"<h1>{_esc(title)}</h1>",
+        f"<p><b>Recorded:</b> {_esc(timestamp)}<br>"
+        f"<b>Source:</b> Apple Watch Voice Memo<br>"
+        f"<b>File:</b> {_esc(audio_path.name)}</p>",
+    ]
+    if summary_en or summary_zh:
+        html_parts.append("<h2>Summary</h2>")
+        if summary_en:
+            html_parts.append(f"<p>{_esc(summary_en)}</p>")
+        if summary_zh:
+            html_parts.append(f"<p>{_esc(summary_zh)}</p>")
+    if key_points_en or key_points_zh:
+        html_parts.append("<h2>Key Points</h2><ul>")
+        for point in list(key_points_en) + list(key_points_zh):
+            html_parts.append(f"<li>{_esc(point)}</li>")
+        html_parts.append("</ul>")
+    if action_items:
+        html_parts.append("<h2>Action Items</h2><ul>")
+        for item in action_items:
+            html_parts.append(f"<li>{_esc(item)}</li>")
+        html_parts.append("</ul>")
+    transcript_html = "<br>".join(_esc(ln) for ln in transcript.strip().split("\n"))
+    html_parts.append("<h2>Transcript</h2>")
+    html_parts.append(
+        f'<div style="font-family:ui-monospace,Menlo,monospace;font-size:0.9em">{transcript_html}</div>'
+    )
 
     return {
         "title": title,
@@ -1237,6 +1276,7 @@ def format_note(audio_path: Path, result: dict) -> dict:
         "audio_path": str(audio_path),
         "timestamp": timestamp,
         "markdown": "\n".join(lines),
+        "html": "\n".join(html_parts),
     }
 
 
@@ -1261,7 +1301,8 @@ def process_recording(audio_path: Path, dry_run: bool = False) -> bool:
     if dry_run:
         from deliveries import get_active_deliveries
         targets = ", ".join(get_active_deliveries())
-        print(f"  [DRY-RUN] would transcribe with {GEMINI_MODEL}")
+        _model = GEMINI_MODEL if STT_PROVIDER not in ("lark", "miaoji") else "volc.lark.minutes"
+        print(f"  [DRY-RUN] would transcribe with STT_PROVIDER={STT_PROVIDER} ({_model})")
         print(f"  [DRY-RUN] would deliver to: {targets}")
         return False
 
@@ -1427,6 +1468,8 @@ def main():
                         help="Run setup checks and exit")
     parser.add_argument("--reprocess", metavar="YYYY-MM-DD",
                         help="Reprocess all recordings from this date (ignores state)")
+    parser.add_argument("--reprocess-all", action="store_true",
+                        help="Reprocess ALL recordings in chronological order (ignores state)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Show what would be processed; skip Gemini and delivery")
     args = parser.parse_args()
@@ -1434,14 +1477,21 @@ def main():
     if args.doctor:
         sys.exit(run_doctor())
 
-    mode = "reprocess" if args.reprocess else "scan"
+    mode = "reprocess-all" if args.reprocess_all else "reprocess" if args.reprocess else "scan"
     dry = " [dry-run]" if args.dry_run else ""
     print(f"watch-transcriber {mode}{dry} at {datetime.now().isoformat()}")
     print(f"Monitoring: {VOICE_MEMOS_DIR}")
 
     processed = load_state()
 
-    if args.reprocess:
+    if args.reprocess_all:
+        # Chronological by filename prefix ("YYYYMMDD HHMMSS..."), ignores state.
+        recordings = sorted(
+            (f for f in VOICE_MEMOS_DIR.iterdir() if f.suffix == ".m4a"),
+            key=lambda p: p.name,
+        ) if VOICE_MEMOS_DIR.exists() else []
+        print(f"Reprocess-all mode: found {len(recordings)} recording(s)")
+    elif args.reprocess:
         try:
             recordings = find_recordings_by_date(args.reprocess)
         except ValueError as e:

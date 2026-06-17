@@ -115,7 +115,7 @@ def _convert_md_body(md: str) -> str:
     def flush_transcript():
         nonlocal in_transcript, transcript_buf
         if in_transcript:
-            out.append(f'<div class="transcript">{html.escape(chr(10).join(transcript_buf).rstrip())}</div>')
+            out.append(f'<div class="transcript">{html.escape(chr(10).join(transcript_buf).strip())}</div>')
             in_transcript = False
             transcript_buf = []
 
@@ -125,6 +125,8 @@ def _convert_md_body(md: str) -> str:
         if in_transcript:
             if s.startswith("#") or s.startswith("---"):
                 flush_transcript()
+            elif s.strip() == "```":
+                continue  # drop the markdown code fences; HTML uses the styled div
             else:
                 transcript_buf.append(s)
                 continue

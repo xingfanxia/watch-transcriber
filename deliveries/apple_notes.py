@@ -7,8 +7,10 @@ import subprocess
 def deliver(note: dict) -> bool:
     folder = os.environ.get("APPLE_NOTES_FOLDER", "Voice Transcripts")
     title = note["title"]
-    # Apple Notes expects HTML body
-    body = note["markdown"].replace("\n", "<br>")
+    # Apple Notes expects an HTML body. Prefer the pre-rendered HTML (proper
+    # headers, bullets, line-broken monospace transcript); fall back to a crude
+    # markdown→<br> conversion only if it's missing.
+    body = note.get("html") or note["markdown"].replace("\n", "<br>")
 
     # Escape for AppleScript string literals (backslash, then double-quote)
     title_esc = title.replace("\\", "\\\\").replace('"', '\\"')
