@@ -2,7 +2,7 @@
 """watch-transcriber: Voice Memos → Gemini STT → pluggable delivery.
 
 Monitors Apple Voice Memos recordings directory for new .m4a files,
-transcribes and summarizes them using Gemini 3 Flash in a single
+transcribes and summarizes them using Gemini 3.5 Flash in a single
 multimodal call, then delivers structured notes to configurable targets.
 """
 
@@ -52,18 +52,25 @@ VOICE_MEMOS_DIR = Path.home() / "Library/Group Containers/group.com.apple.VoiceM
 STATE_DIR = SCRIPT_DIR / "state"
 STATE_FILE = STATE_DIR / "processed.json"
 
-# Gemini model. Default = gemini-3-flash-preview. Note: on >15min audio in a
-# single call, Gemini 3 silently summarizes / drops segments — verified on a
+# Gemini model. Default = gemini-3.5-flash (GA; bumped from gemini-3-flash-preview
+# 2026-06-16 for better transcription/speaker accuracy). Note: on >15min audio in a
+# single call, Gemini 3.x silently summarizes / drops segments — verified on a
 # 2hr file 2026-05-18 where single-call output ended at 1h22m and collapsed
 # 71min into one line. Chunking (below) is what makes it usable.
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3-flash-preview")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
 
 # Skip recordings shorter than this (seconds). Voice Memos sometimes captures
 # brief accidental taps; transcribing them wastes API quota.
 MIN_DURATION_SECONDS = int(os.environ.get("MIN_DURATION_SECONDS", "60"))
 
-# Provider selection: "gemini" (default) or "openai" (gpt-4o-transcribe-diarize)
-STT_PROVIDER = os.environ.get("STT_PROVIDER", "gemini").lower()
+# Provider selection:
+#   "lark"   — 妙记 (Volcano Lark Minutes ASR); best diarization, single-call,
+#              server-side speaker detection. Needs VOLC_API_KEY + VOLC_TOS_*. See volc_lark.py.
+#   "gemini" — Gemini 3.5 Flash, silence-aware chunking + Senko/pyannote diarization.
+#   "openai" — gpt-4o-transcribe-diarize, chunked.
+# Default "lark": verified 2026-06-17 to diarize best across 5 recordings (exact
+# speaker count on every 2-person conversation vs over-counting by the others).
+STT_PROVIDER = os.environ.get("STT_PROVIDER", "lark").lower()
 
 # Chunking thresholds (used by both providers).
 # Gemini 3 Flash silently summarizes / drops segments on long single-call audio.
@@ -983,6 +990,18 @@ def _openai_transcribe(audio_path: Path) -> str:
             pyannote_pool.shutdown(wait=False)
 
 
+def _lark_transcribe(audio_path: Path) -> str:
+    """Transcribe via 妙记 (Volcano Lark Minutes ASR) — see volc_lark.py.
+
+    妙记 does its own server-side diarization (best speaker accuracy of all
+    providers tested) in a single call, so this path skips chunking and the
+    Senko/pyannote reconcile entirely. watch-transcriber auto-detects the
+    speaker count (LARK_NUM_SPEAKERS, default 0 = auto)."""
+    from volc_lark import lark_transcribe
+    num_speakers = int(os.environ.get("LARK_NUM_SPEAKERS", "0"))
+    return lark_transcribe(audio_path, num_speakers)
+
+
 # ---------------------------------------------------------------------------
 # Prompts
 # ---------------------------------------------------------------------------
@@ -1026,12 +1045,15 @@ Transcript:
 
 def transcribe_and_summarize(audio_path: Path) -> dict:
     """Two-stage pipeline:
-      1. Transcribe (provider = STT_PROVIDER, default "gemini")
+      1. Transcribe (provider = STT_PROVIDER, default "lark")
+         - Lark (妙记): single server-side call with diarization; requires
+                   VOLC_API_KEY + VOLC_TOS_* (see volc_lark.py).
          - Gemini: chunk at silence boundaries when audio > CHUNK_THRESHOLD_SEC
                    (Gemini 3 Flash loses coherence on long audio in a single call:
                     loops, fabricates timestamps).
          - OpenAI: always chunk to respect 25MB / 1500s per-request limits.
       2. Summarize the transcript text via Gemini → JSON summary/key_points/action_items.
+         (The summary stage always uses Gemini regardless of STT_PROVIDER.)
     """
     genai = ensure_genai()
     api_key = os.environ.get("GEMINI_API_KEY")
@@ -1043,6 +1065,8 @@ def transcribe_and_summarize(audio_path: Path) -> dict:
     # Stage 1: transcribe
     if STT_PROVIDER == "openai":
         transcript = _openai_transcribe(audio_path)
+    elif STT_PROVIDER in ("lark", "miaoji"):
+        transcript = _lark_transcribe(audio_path)
     else:
         transcript = _gemini_transcribe(client, audio_path)
 
@@ -1292,8 +1316,21 @@ def run_doctor() -> int:
             warned.append(label)
 
     print("== Configuration ==")
+    check("STT_PROVIDER", True, note=STT_PROVIDER)
+    # GEMINI is always needed (summary step runs on Gemini regardless of provider).
     check("GEMINI_API_KEY set", bool(os.environ.get("GEMINI_API_KEY")))
     check("GEMINI_MODEL", True, note=GEMINI_MODEL)
+    if STT_PROVIDER in ("lark", "miaoji"):
+        tos_keys = ["VOLC_API_KEY", "VOLC_TOS_ACCESS_KEY", "VOLC_TOS_SECRET_KEY",
+                    "VOLC_TOS_BUCKET", "VOLC_TOS_REGION", "VOLC_TOS_ENDPOINT"]
+        missing = [k for k in tos_keys if not os.environ.get(k)]
+        check("妙记 (lark) credentials", not missing,
+              note="VOLC_API_KEY + VOLC_TOS_* set" if not missing else f"missing: {', '.join(missing)}")
+        try:
+            import tos  # noqa: F401
+            check("妙记 tos SDK", True, note="importable")
+        except ImportError:
+            check("妙记 tos SDK", False, note="pip install tos")
     targets = get_active_deliveries()
     check("DELIVERY_TARGETS", bool(targets), note=", ".join(targets) or "(empty)")
     unknown = [t for t in targets if t not in BUILTIN_DELIVERIES]
