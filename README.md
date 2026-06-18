@@ -6,7 +6,7 @@ Zero-cost Apple Watch voice transcription pipeline. Record on your wrist, get st
 
 ```
 Apple Watch (Voice Memos) → iCloud Sync → Mac detects new .m4a
-  → Gemini 3 Flash STT (multilingual + diarization)
+  → 妙记 (Volcano Lark Minutes) STT — server-side diarization (Gemini/OpenAI fallback)
     → Pluggable delivery (Apple Notes, Feishu, Obsidian, custom)
 ```
 
@@ -40,21 +40,25 @@ Voice Memos in iOS 18+ has built-in transcription, but:
 - **Recordings sync instantly.** Files appear at a known path on your Mac within seconds.
 - **launchd `WatchPaths`** is the native macOS way to react to filesystem changes — zero polling, zero battery waste, zero dependencies.
 
-### STT: Why Gemini 3 Flash?
+### STT: Why 妙记 (Volcano Lark Minutes)?
 
-We benchmarked STT options for mixed Chinese-English audio:
+**妙记 (`volc.lark.minutes`) is the default** (`STT_PROVIDER=lark`). It does speaker diarization **server-side in a single call** — no chunking, no cross-chunk speaker stitching. Verified across 5 real recordings (2026-06): 妙记 returned the exact speaker count on every two-person conversation (2/2/2/2), where chunk-stitched Gemini/OpenAI and the raw Doubao auc models all over-counted (3–5 speakers); it also swallowed a 3.45-hour file in one pass. Diarization, not transcription, was the real hard half — and 妙记 treats it as a first-class server-side job instead of a stitching afterthought.
+
+妙记 needs a publicly-fetchable FileURL, so the pipeline converts audio to a small 16kHz-mono mp3, uploads it to Volcano TOS, hands 妙记 a presigned URL, then deletes the object. Use a **Hong Kong** TOS region — it uploads far faster from outside mainland China (~700KB/s single-stream vs ~10–30KB/s to Shanghai) and 妙记 still fetches it fine. Requires `VOLC_API_KEY` + `VOLC_TOS_*` (see `.env.example`).
+
+**Gemini 3.5 Flash** and **OpenAI gpt-4o-transcribe-diarize** remain as fallbacks (`STT_PROVIDER=gemini|openai`); they auto-chunk long audio and stitch speaker labels across chunks (details below). We originally benchmarked these for mixed Chinese-English audio:
 
 | Provider | Mixed zh+en MER | Price/hr | Diarization |
 |----------|----------------|----------|-------------|
+| **妙记 (Lark Minutes)** — default | Good (zh + mixed) | low | **Yes — server-side, best** |
 | Gemini 3 Pro | **7.2%** (best) | ~$0.50-2 | No (prompt-based) |
-| Gemini 3 Flash Preview | Good | ~$0.10 | Yes |
+| Gemini 3.5 Flash | Good | ~$0.10 | Chunk-stitched |
 | OpenAI gpt-4o-transcribe-diarize | OK on en, weaker mixed | $0.45/hr | Yes (native) |
 | Qwen3-ASR-Flash | 5.78% WER | ~$0.04 | No |
 | OpenAI Whisper API | ~12% (single-lang) | $0.36 | No |
-| DouBao ASR | Good for zh, weaker mixed | Unknown | Unknown |
 | Deepgram Nova-3 | Chinese not supported | $0.31 | Yes |
 
-Gemini 3 Flash Preview is the default. On a 2-hour Chinese+English voice note we tested side-by-side against `gpt-4o-transcribe-diarize`, Gemini won on punctuation, code-switching (`ROI` stayed `ROI` vs OpenAI's `RY`), and didn't hallucinate English filler from Chinese particles. OpenAI is available via `STT_PROVIDER=openai` if you want more granular interjection capture (catches every "嗯/yeah").
+Between the two fallbacks: on a 2-hour Chinese+English voice note tested side-by-side, Gemini won on punctuation, code-switching (`ROI` stayed `ROI` vs OpenAI's `RY`), and didn't hallucinate English filler from Chinese particles — so Gemini is the preferred fallback; OpenAI (`STT_PROVIDER=openai`) catches more granular interjections.
 
 ### Long-audio handling (silence-aware chunking + parallel)
 
@@ -72,7 +76,9 @@ The summary step runs as a separate text-input call after transcription, so JSON
 
 Tunable via `CHUNK_THRESHOLD_SEC` / `CHUNK_TARGET_SEC` / `CHUNK_MIN_SEC` / `CHUNK_MAX_SEC` / `CHUNK_PARALLELISM` env vars (see `.env.example`).
 
-### Speaker label consistency across chunks
+### Speaker label consistency across chunks (Gemini/OpenAI fallback only)
+
+> This whole section applies only to the `gemini`/`openai` fallbacks. The default `lark` (妙记) provider does diarization server-side in one pass — no chunking, no stitching — which is exactly why it's the default.
 
 When the audio gets chunked, each chunk's `SPEAKER_0`/`SPEAKER_1` labels are independent — chunk 1's SPEAKER_0 might be the same person as chunk 2's SPEAKER_1. This pipeline addresses that with a global diarization pass that runs **in parallel** with Gemini chunk transcription, then assigns each transcript line a consistent global speaker label.
 
@@ -130,9 +136,10 @@ For doc deletes specifically, you'll also need the `drive:drive` scope, which re
 
 - macOS with iCloud signed in (same Apple ID as your Watch)
 - Apple Watch with Voice Memos (any model)
-- [Gemini API key](https://aistudio.google.com/apikey)
+- For the default **妙记** provider: a Volcano Engine `VOLC_API_KEY` + TOS bucket creds (`VOLC_TOS_*`, Hong Kong region recommended) — see `.env.example`. `pip install tos`.
+- A [Gemini API key](https://aistudio.google.com/apikey) — always needed (the summary stage runs on Gemini; also the `gemini` fallback provider).
 - Python **3.12+** (Apple's system `python3` is 3.9 — too old; install with `brew install python@3.12` or asdf)
-- `ffmpeg` — required for silence-aware chunking of long audio. `brew install ffmpeg`
+- `ffmpeg` — required for audio conversion + silence-aware chunking. `brew install ffmpeg`
 
 ### Install
 
@@ -233,7 +240,7 @@ Then add `your_target` to `DELIVERY_TARGETS` in `.env`.
 1. **Record** on Apple Watch using Voice Memos (or any device)
 2. **iCloud syncs** the `.m4a` to `~/Library/Group Containers/group.com.apple.VoiceMemos.shared/Recordings/`
 3. **launchd detects** the new file via `WatchPaths`
-4. **Gemini 3 Flash** transcribes with speaker diarization and multilingual support
+4. **妙记 (Volcano Lark Minutes)** transcribes with server-side speaker diarization (or the Gemini/OpenAI fallback), then Gemini summarizes the transcript
 5. **Delivery layer** sends the structured note to your configured targets
 
 ## Project structure
@@ -264,7 +271,7 @@ This project is designed to be **modular and forkable**. Every layer is a simple
 |-------|---------|--------------------------|
 | **Recording** | Apple Voice Memos | Any app that syncs audio files to a known directory |
 | **File monitoring** | macOS `launchd WatchPaths` | `fswatch`, `inotifywait` (Linux), polling, or a cloud trigger |
-| **Transcription** | Gemini 3 Flash (multimodal) | Whisper, Qwen3-ASR, DouBao, AssemblyAI, Deepgram — just replace `transcribe_and_summarize()` |
+| **Transcription** | 妙记 (Volcano Lark Minutes) default; Gemini 3.5 Flash / OpenAI fallback | Whisper, Qwen3-ASR, AssemblyAI, Deepgram — add a provider branch in `transcribe_and_summarize()` |
 | **Delivery** | file, Apple Notes, Feishu, Obsidian, agent | Drop a new `.py` in `deliveries/` with a `deliver(note)` function |
 
 PRs welcome for:

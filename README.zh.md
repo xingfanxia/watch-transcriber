@@ -6,7 +6,7 @@
 
 ```
 Apple Watch (语音备忘录) → iCloud 同步 → Mac 检测新 .m4a
-  → Gemini 3 Flash 语音识别 (多语言 + 说话人识别)
+  → 妙记（火山 Lark Minutes）语音识别 — 服务端说话人分离（Gemini/OpenAI 兜底）
     → 可插拔投递层 (Apple Notes、飞书、Obsidian、自定义)
 ```
 
@@ -40,21 +40,25 @@ iOS 18+ 的语音备忘录自带转写功能，但是：
 - **录音秒级同步。** 文件几秒内就出现在 Mac 的已知路径上。
 - **launchd `WatchPaths`** 是 macOS 原生文件系统监听，零轮询、零耗电、零依赖。
 
-### 语音识别：为什么选 Gemini 3 Flash？
+### 语音识别：为什么默认选 妙记（火山 Lark Minutes）？
 
-我们对比了中英混合音频的语音识别方案：
+**默认走 妙记（`volc.lark.minutes`，`STT_PROVIDER=lark`）。** 它**一次调用就在服务端做完说话人分离**——不切块、不跨块缝合。在 5 段真实录音上验证（2026-06）：妙记对 4 段两人对话**每段都精准判 2 人**，而切块缝合的 Gemini/OpenAI 以及豆包 auc 模型全都虚高（3–5 人）；3.45 小时的长文件也一次吃下。难的从来不是转写，是「谁在说」——妙记把它当成服务端的一等任务，而不是缝合的事后补救。
+
+妙记需要一个公网可下载的 FileURL，所以流水线会先把音频转成 16kHz 单声道小 mp3，上传到火山 TOS，给妙记一个预签名链接，转完再删掉。**TOS 建议用香港区域**——从中国大陆以外上传快得多（单线程 ~700KB/s vs 上海 ~10–30KB/s），妙记照样能取。需要 `VOLC_API_KEY` + `VOLC_TOS_*`（见 `.env.example`）。
+
+**Gemini 3.5 Flash** 和 **OpenAI gpt-4o-transcribe-diarize** 作为兜底（`STT_PROVIDER=gemini|openai`），它们会自动切块长音频并跨块缝合说话人标签（详见下文）。我们最初对比中英混合音频的方案：
 
 | 服务商 | 中英混合 MER | 每小时成本 | 说话人识别 |
 |--------|-------------|-----------|-----------|
+| **妙记（Lark Minutes）**—默认 | 良好（中文 + 混合） | 低 | **是—服务端，最佳** |
 | Gemini 3 Pro | **7.2%**（最佳） | ~$0.50-2 | 否（需 prompt 引导） |
-| Gemini 3 Flash Preview | 良好 | ~$0.10 | 是 |
+| Gemini 3.5 Flash | 良好 | ~$0.10 | 切块缝合 |
 | OpenAI gpt-4o-transcribe-diarize | 英文 OK，中英混合较弱 | $0.45/hr | 是（原生） |
 | Qwen3-ASR-Flash | 5.78% WER | ~$0.04 | 否 |
 | OpenAI Whisper API | ~12%（单语言） | $0.36 | 否 |
-| 豆包 ASR | 中文好，混合一般 | 未公开 | 未知 |
 | Deepgram Nova-3 | 不支持中文 | $0.31 | 是 |
 
-默认走 Gemini 3 Flash Preview。在一段 2 小时中英混合录音上和 `gpt-4o-transcribe-diarize` 做了完整对比，Gemini 在标点、code-switching（`ROI` 保留为 `ROI`，OpenAI 转成了 `RY`）、不会从中文语气词幻觉出英文片段（OpenAI 把 "嗯"/"是" 转成了 `"She is she."`）这几方面都胜出。需要更细颗粒度的语气词捕捉时可以用 `STT_PROVIDER=openai` 切换到 OpenAI。
+两个兜底之间：一段 2 小时中英混合录音上和 `gpt-4o-transcribe-diarize` 完整对比，Gemini 在标点、code-switching（`ROI` 保留为 `ROI`，OpenAI 转成了 `RY`）、不会从中文语气词幻觉出英文片段这几方面都胜出——所以 Gemini 是首选兜底；OpenAI（`STT_PROVIDER=openai`）能捕捉更细颗粒度的语气词。
 
 ### 长音频处理（静音切分 + 并行）
 
@@ -118,9 +122,10 @@ lark-cli auth status                               # → 应该看到 tokenStatu
 
 - macOS，登录 iCloud（与手表同一 Apple ID）
 - Apple Watch，已安装语音备忘录（任何型号）
-- [Gemini API Key](https://aistudio.google.com/apikey)
+- 默认 **妙记** provider：火山引擎 `VOLC_API_KEY` + TOS 桶凭据（`VOLC_TOS_*`，建议香港区域）——见 `.env.example`。`pip install tos`。
+- [Gemini API Key](https://aistudio.google.com/apikey)——始终需要（摘要阶段走 Gemini；也是 `gemini` 兜底 provider）。
 - Python **3.12+**（系统自带的 `python3` 是 3.9，太老；用 `brew install python@3.12` 或 asdf 装）
-- `ffmpeg` — 长音频静音切分必需。`brew install ffmpeg`
+- `ffmpeg` — 音频转换 + 长音频静音切分必需。`brew install ffmpeg`
 
 ### 安装步骤
 
@@ -223,7 +228,7 @@ def deliver(note: dict) -> bool:
 1. 在 Apple Watch 上用**语音备忘录**录音（或任何设备）
 2. **iCloud 同步** `.m4a` 到 `~/Library/Group Containers/group.com.apple.VoiceMemos.shared/Recordings/`
 3. **launchd 检测到**新文件（通过 `WatchPaths`）
-4. **Gemini 3 Flash** 执行语音识别（支持多语言 + 说话人识别）
+4. **妙记（火山 Lark Minutes）** 执行语音识别 + 服务端说话人分离（或 Gemini/OpenAI 兜底），随后 Gemini 对文稿做摘要
 5. **投递层**将结构化笔记发送到你配置的目标
 
 ## 项目结构
@@ -252,7 +257,7 @@ watch-transcriber/
 |----|---------|-------|
 | **录音** | Apple 语音备忘录 | 任何能将音频同步到已知目录的 App |
 | **文件监听** | macOS `launchd WatchPaths` | `fswatch`、`inotifywait`（Linux）、轮询、云端触发 |
-| **语音识别** | Gemini 3 Flash（多模态） | Whisper、Qwen3-ASR、豆包、AssemblyAI、Deepgram — 替换 `transcribe_and_summarize()` 即可 |
+| **语音识别** | 妙记（火山 Lark Minutes）默认；Gemini 3.5 Flash / OpenAI 兜底 | Whisper、Qwen3-ASR、AssemblyAI、Deepgram — 在 `transcribe_and_summarize()` 加一个 provider 分支 |
 | **投递** | 文件、Apple 备忘录、飞书、Obsidian、Agent | 在 `deliveries/` 里放一个带 `deliver(note)` 函数的 `.py` 文件 |
 
 欢迎 PR：
