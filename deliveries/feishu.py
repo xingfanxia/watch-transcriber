@@ -13,14 +13,15 @@ Config (in .env):
 import json
 import os
 import subprocess
-import tempfile
 
 
 def _parse_doc_url(stdout: str) -> str:
     """Extract doc_url from lark-cli JSON output."""
     try:
         data = json.loads(stdout)
-        return data.get("data", {}).get("doc_url", "")
+        d = data.get("data", {})
+        # v2 schema: data.document.url ; v1 (legacy): data.doc_url
+        return d.get("document", {}).get("url", "") or d.get("doc_url", "")
     except (json.JSONDecodeError, AttributeError):
         return ""
 
@@ -35,36 +36,35 @@ def deliver(note: dict) -> bool:
     title = note["title"]
     markdown = note["markdown"]
 
-    # Always write to temp file to avoid CLI arg length limits
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False, encoding="utf-8") as f:
-        f.write(markdown)
-        tmp_path = f.name
+    # lark-cli docs +create is v2-only: --markdown was removed in favor of
+    # --content with --doc-format markdown (v1 interface shut down). Pass the
+    # body via --content - (stdin), no shell: avoids ARG_MAX limits on long
+    # transcripts and shell-quoting/injection via title or content. (@file only
+    # accepts a relative path inside the cwd, so stdin is the robust large payload.)
+    cmd = [
+        "lark-cli", "docs", "+create",
+        "--title", title,
+        "--doc-format", "markdown",
+        "--content", "-",
+    ]
+    wiki_space = os.environ.get("FEISHU_WIKI_SPACE", "")
+    folder_token = os.environ.get("FEISHU_FOLDER_TOKEN", "")
+    if wiki_space:
+        cmd += ["--parent-position", wiki_space]
+    elif folder_token:
+        cmd += ["--parent-token", folder_token]
 
-    try:
-        # Use shell to expand $(cat file) since lark-cli doesn't support @file
-        folder_token = os.environ.get("FEISHU_FOLDER_TOKEN", "")
-        wiki_space = os.environ.get("FEISHU_WIKI_SPACE", "")
+    result = subprocess.run(cmd, input=markdown, capture_output=True, text=True, timeout=60)
 
-        extra_args = ""
-        if wiki_space:
-            extra_args = f'--wiki-space "{wiki_space}"'
-        elif folder_token:
-            extra_args = f'--folder-token "{folder_token}"'
+    if result.returncode != 0:
+        print(f"[delivery:feishu] error: {(result.stderr or result.stdout)[:500]}")
+        return False
 
-        cmd = f'lark-cli docs +create --title "{title}" --markdown "$(cat {tmp_path})" {extra_args}'
-        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=60)
+    doc_url = _parse_doc_url(result.stdout)
+    if doc_url:
+        note["feishu_doc_url"] = doc_url
 
-        if result.returncode != 0:
-            print(f"[delivery:feishu] error: {result.stderr[:500]}")
-            return False
-
-        doc_url = _parse_doc_url(result.stdout)
-        if doc_url:
-            note["feishu_doc_url"] = doc_url
-
-        print(f"[delivery:feishu] created doc '{title}'")
-        if result.stdout.strip():
-            print(f"[delivery:feishu] {result.stdout.strip()}")
-        return True
-    finally:
-        os.unlink(tmp_path)
+    print(f"[delivery:feishu] created doc '{title}'")
+    if result.stdout.strip():
+        print(f"[delivery:feishu] {result.stdout.strip()}")
+    return True
