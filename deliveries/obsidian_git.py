@@ -14,9 +14,14 @@ def deliver(note: dict) -> bool:
         print("[delivery:obsidian_git] OBSIDIAN_REPO and GITHUB_TOKEN required")
         return False
 
-    today = datetime.now().strftime("%Y-%m-%d")
-    safe_title = note["title"].replace("/", "-").replace(":", "-")
-    path = f"Voice Notes/{today}/{safe_title}.md"
+    # Deterministic path keyed on the recording timestamp: AI titles vary
+    # between reprocess runs and the GitHub contents API can't rename, so the
+    # descriptive title lives in the markdown H1 / commit message instead.
+    try:
+        dt = datetime.fromisoformat(note.get("timestamp", ""))
+    except ValueError:
+        dt = datetime.now()
+    path = f"Voice Notes/{dt.strftime('%Y-%m-%d')}/{dt.strftime('%H%M%S')}-voice-note.md"
 
     content_b64 = base64.b64encode(note["markdown"].encode("utf-8")).decode("ascii")
 

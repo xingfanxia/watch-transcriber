@@ -44,6 +44,12 @@ def deliver(note: dict) -> bool:
 
     recording_name = f"{dt.strftime('%H%M%S')}-{_slug(note['title'])}.md"
     recording_path = date_dir / recording_name
+    # AI titles can differ between reprocess runs; the HHMMSS prefix is the
+    # deterministic key. Drop stale outputs for the same recording so the
+    # daily.md rollup doesn't accumulate duplicates.
+    for old in date_dir.glob(f"{dt.strftime('%H%M%S')}-*.md"):
+        if old != recording_path:
+            old.unlink()
     recording_path.write_text(note["markdown"], encoding="utf-8")
     print(f"[delivery:local_archive] wrote {recording_path}")
 

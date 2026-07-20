@@ -1025,6 +1025,7 @@ TRANSCRIBE_PROMPT = """请将这段音频转录成文字，并标注说话人。
 
 SUMMARIZE_PROMPT = """You are analyzing a diarized transcript. Produce a JSON object with these fields:
 
+- title: a short descriptive title naming what the recording is actually about (≤12字 if Chinese, ≤8 words if English). Use the transcript's dominant language. No dates, no quotes, no generic labels like "Voice Note"/"录音"/"对话记录"
 - summary_en: 2-3 sentence summary in English
 - summary_zh: 2-3 sentence summary in Chinese (中文摘要)
 - key_points_en: 3-7 key points in English
@@ -1033,6 +1034,7 @@ SUMMARIZE_PROMPT = """You are analyzing a diarized transcript. Produce a JSON ob
 
 Return ONLY valid JSON, no markdown fences:
 {
+  "title": "...",
   "summary_en": "...",
   "summary_zh": "...",
   "key_points_en": ["...", "..."],
@@ -1053,7 +1055,7 @@ def transcribe_and_summarize(audio_path: Path) -> dict:
                    (Gemini 3 Flash loses coherence on long audio in a single call:
                     loops, fabricates timestamps).
          - OpenAI: always chunk to respect 25MB / 1500s per-request limits.
-      2. Summarize the transcript text via Gemini → JSON summary/key_points/action_items.
+      2. Summarize the transcript text via Gemini → JSON title/summary/key_points/action_items.
          (The summary stage always uses Gemini regardless of STT_PROVIDER.)
     """
     genai = ensure_genai()
@@ -1166,17 +1168,37 @@ def _parse_gemini_json(text: str) -> dict:
     return {"summary": "", "key_points": [], "action_items": [], "transcript": text}
 
 
+def _clean_ai_title(raw) -> str:
+    """Sanitize the model-generated title into a safe single line (hard invariant:
+    the title flows into AppleScript, CLI args, filenames, and markdown headers)."""
+    if not isinstance(raw, str):
+        return ""
+    t = " ".join(raw.split())  # collapse newlines/whitespace runs
+    # Strip control chars (AppleScript/filesystem) and markdown metachars that
+    # would render as formatting in `# {title}` / `**{title}**` contexts.
+    t = re.sub(r"[\x00-\x1f\x7f#*`\[\]|]", "", t)
+    t = t.strip("\"'“”‘’ ")
+    return t[:40]
+
+
 def format_note(audio_path: Path, result: dict) -> dict:
     """Format Gemini result into a structured note."""
     name = audio_path.stem
     try:
         date_part = name[:15]  # "YYYYMMDD HHMMSS"
         dt = datetime.strptime(date_part, "%Y%m%d %H%M%S")
-        title = f"Voice Note {dt.strftime('%Y-%m-%d %H:%M')}"
+        ts_label = dt.strftime("%Y-%m-%d %H:%M")
         timestamp = dt.isoformat()
     except (ValueError, IndexError):
-        title = f"Voice Note {name}"
+        ts_label = name
         timestamp = datetime.now().isoformat()
+
+    # Content-first title so Apple Notes / Feishu lists are scannable; the
+    # timestamp suffix keeps same-day recordings unique and chronologically
+    # identifiable. Falls back to the old timestamp-only form when the
+    # summarize stage returned no usable title.
+    ai_title = _clean_ai_title(result.get("title", ""))
+    title = f"{ai_title} ({ts_label})" if ai_title else f"Voice Note {ts_label}"
 
     summary_en = result.get("summary_en", result.get("summary", ""))
     summary_zh = result.get("summary_zh", "")

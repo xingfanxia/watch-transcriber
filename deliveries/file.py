@@ -1,15 +1,28 @@
 """File delivery — saves transcript as markdown to OUTPUT_DIR."""
 
 import os
+import re
 from pathlib import Path
+
+from . import safe_filename
 
 
 def deliver(note: dict) -> bool:
     output_dir = Path(os.environ.get("OUTPUT_DIR", "~/Documents/VoiceNotes")).expanduser()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    safe_title = note["title"].replace("/", "-").replace(":", "-")
+    safe_title = safe_filename(note["title"])
     path = output_dir / f"{safe_title}.md"
+
+    # The AI-generated title part can differ between reprocess runs; the
+    # "(<timestamp>)" suffix is the deterministic per-recording key. Drop any
+    # prior output for the same recording so reprocessing overwrites instead
+    # of accumulating orphans.
+    suffix = re.search(r"\(([^()]*)\)$", safe_title)
+    if suffix:
+        for old in output_dir.glob(f"*({suffix.group(1)}).md"):
+            if old != path:
+                old.unlink()
 
     path.write_text(note["markdown"], encoding="utf-8")
     print(f"[delivery:file] saved to {path}")
