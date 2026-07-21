@@ -8,3 +8,7 @@ data/
 data-openai/
 data-senko/
 cclogs/
+
+# backfill run artifacts (personal titles + doc tokens)
+scripts/backfill/backfill_ledger.jsonl
+scripts/backfill/*_manifest.json

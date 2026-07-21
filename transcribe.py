@@ -1077,14 +1077,21 @@ def transcribe_and_summarize(audio_path: Path) -> dict:
         print("  Transcription returned empty text")
         return {"transcript": ""}
 
-    # Stage 2: summarize (text input → JSON output, no loop risk)
+    # Stage 2: summarize (text input → JSON output, no loop risk).
+    # At temp=1.0 Gemini occasionally emits unparseable JSON or omits fields;
+    # retry on unusable output, then degrade gracefully (fallback title,
+    # empty summary) rather than blocking delivery.
     print(f"  Summarizing with {GEMINI_MODEL}...")
-    summary_resp = client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=[SUMMARIZE_PROMPT + transcript],
-        config={"response_mime_type": "application/json"},
-    )
-    result = _parse_gemini_json(summary_resp.text or "")
+    for attempt in range(3):
+        summary_resp = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=[SUMMARIZE_PROMPT + transcript],
+            config={"response_mime_type": "application/json"},
+        )
+        result = _parse_gemini_json(summary_resp.text or "")
+        if _clean_ai_title(result.get("title", "")):
+            break
+        print(f"  [summarize] unusable output (attempt {attempt + 1}/3), retrying")
     result["transcript"] = transcript
     return result
 
@@ -1178,7 +1185,10 @@ def _clean_ai_title(raw) -> str:
     # would render as formatting in `# {title}` / `**{title}**` contexts.
     t = re.sub(r"[\x00-\x1f\x7f#*`\[\]|]", "", t)
     t = t.strip("\"'“”‘’ ")
-    return t[:40]
+    # Length cap: cut spaced (English) text at a word boundary, CJK at the cap.
+    if len(t) > 60:
+        t = t[:61].rsplit(" ", 1)[0] if " " in t[:61] else t[:60]
+    return t.strip()
 
 
 def format_note(audio_path: Path, result: dict) -> dict:

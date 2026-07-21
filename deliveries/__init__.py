@@ -26,7 +26,7 @@ def safe_filename(title: str) -> str:
     confusing); AI-generated titles can contain any of these. Keeps word chars,
     CJK, spaces, parens, dots, hyphens; everything else becomes a hyphen.
     """
-    s = re.sub(r"[^\w一-鿿 ().-]", "-", title)
+    s = re.sub(r"[^\w一-鿿《》「」【】· ().-]", "-", title)
     s = re.sub(r"-{2,}", "-", s)
     s = re.sub(r"\s+", " ", s).strip(" -.")
     return s[:80] or "note"
