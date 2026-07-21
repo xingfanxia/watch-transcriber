@@ -22,8 +22,9 @@ import time
 from pathlib import Path
 
 MANIFESTS = [
-    Path(__file__).parent / "feishu_old_docs_manifest.json",   # old "Voice Note ..." docs
-    Path(__file__).parent / "feishu_dup_docs_manifest.json",   # backfill-resume duplicates
+    # Ground truth: full drive listing reconciled against the canonical ledger
+    # (supersedes the log-harvested feishu_old_docs / feishu_dup_docs manifests).
+    Path(__file__).parent / "feishu_drive_reconciled_manifest.json",
 ]
 
 
@@ -44,15 +45,20 @@ def main():
         if not args.yes:
             print(f"  would delete: {d['title']}  {d['url']}")
             continue
+        # Query params must go via --params: an inline "?type=docx" on the path
+        # is dropped by lark-cli api for DELETE → 99992402 field validation.
         r = subprocess.run(
             ["lark-cli", "api", "DELETE",
-             f"/open-apis/drive/v1/files/{d['token']}?type=docx"],
+             f"/open-apis/drive/v1/files/{d['token']}",
+             "--params", '{"type":"docx"}'],
             capture_output=True, text=True, timeout=30,
         )
         out = (r.stdout or r.stderr).strip()
         ok = r.returncode == 0 and '"ok": true' in out
-        # Already-deleted docs return not-found — treat as success (idempotent).
-        gone = "not found" in out.lower() or "deleted" in out.lower()
+        # Already-deleted docs return 1061007 "file has been delete." —
+        # treat as success (idempotent).
+        gone = ("1061007" in out or "has been delete" in out
+                or "not found" in out.lower())
         if ok or gone:
             print(f"  deleted: {d['title']}")
         else:
