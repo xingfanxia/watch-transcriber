@@ -151,8 +151,9 @@ DELIVERY_TARGETS=file,apple_notes
 | 目标 | 说明 | 需要配置 |
 |------|------|---------|
 | `file` | 保存为 Markdown 文件 | `OUTPUT_DIR` |
+| `local_archive` | 结构化 `data/YYYY-MM-DD/` 归档:单录音 `.md` + `daily.md` + `daily.html` 汇总 | `LOCAL_ARCHIVE_DIR`(默认 `./data`),`LOCAL_ARCHIVE_HTML=0` 跳过 HTML |
 | `apple_notes` | 创建 Apple 备忘录 | `APPLE_NOTES_FOLDER` |
-| `feishu` | 创建飞书文档 | `FEISHU_FOLDER_TOKEN` 或 `FEISHU_WIKI_SPACE` |
+| `feishu` | 创建飞书文档(可选把所有权从 bot 转给你) | `FEISHU_FOLDER_TOKEN` 或 `FEISHU_WIKI_SPACE`;转移所有权需 `FEISHU_DOC_OWNER_ID` |
 | `feishu_notify` | 飞书 IM 私信通知摘要 | `FEISHU_NOTIFY_USER_ID` |
 | `obsidian_git` | 提交到 GitHub 仓库 | `OBSIDIAN_REPO`, `GITHUB_TOKEN` |
 | `agent` | 委托给 `claude -p` | `AGENT_DELIVERY_PROMPT` |
@@ -228,8 +229,8 @@ def deliver(note: dict) -> bool:
 1. 在 Apple Watch 上用**语音备忘录**录音（或任何设备）
 2. **iCloud 同步** `.m4a` 到 `~/Library/Group Containers/group.com.apple.VoiceMemos.shared/Recordings/`
 3. **launchd 检测到**新文件（通过 `WatchPaths`）
-4. **妙记（火山 Lark Minutes）** 执行语音识别 + 服务端说话人分离（或 Gemini/OpenAI 兜底），随后 Gemini 对文稿做摘要
-5. **投递层**将结构化笔记发送到你配置的目标
+4. **妙记（火山 Lark Minutes）** 执行语音识别 + 服务端说话人分离（或 Gemini/OpenAI 兜底），随后 Gemini 对文稿做摘要并生成标题
+5. **投递层**将结构化笔记发送到你配置的目标——标题格式 `YYYY-MM-DD HH:MM 内容标题`，按名称排序即时间序
 
 ## 项目结构
 
@@ -239,10 +240,13 @@ watch-transcriber/
 ├── deliveries/
 │   ├── __init__.py            # 投递路由
 │   ├── file.py                # Markdown 文件输出
+│   ├── local_archive.py       # 结构化 data/YYYY-MM-DD/ 归档（单录音 + 每日汇总 + HTML）
 │   ├── apple_notes.py         # Apple 备忘录（AppleScript）
 │   ├── feishu.py              # 飞书文档（lark-cli）
+│   ├── feishu_notify.py       # 飞书 bot 私信（附文档链接）
 │   ├── obsidian_git.py        # GitHub 提交到 Obsidian 仓库
 │   └── agent.py               # claude -p 委托（飞书、Slack 等）
+├── scripts/backfill/          # 一次性运维:AI 标题回填 / 重排 / 飞书旧文档清理
 ├── setup.sh                   # 一键安装
 ├── com.watch-transcriber.plist # launchd 模板
 ├── .env.example               # 配置模板

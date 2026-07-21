@@ -167,7 +167,7 @@ Available deliveries:
 | `file` | Save markdown to a folder | `OUTPUT_DIR` |
 | `local_archive` | Structured `data/YYYY-MM-DD/` archive with per-recording `.md`, `daily.md`, `daily.html` rollup | `LOCAL_ARCHIVE_DIR` (default `./data`), `LOCAL_ARCHIVE_HTML=0` to skip HTML |
 | `apple_notes` | Create an Apple Note | `APPLE_NOTES_FOLDER` |
-| `feishu` | Create a Feishu/Lark doc | `FEISHU_FOLDER_TOKEN` or `FEISHU_WIKI_SPACE` |
+| `feishu` | Create a Feishu/Lark doc (optionally transfer ownership from the bot to you) | `FEISHU_FOLDER_TOKEN` or `FEISHU_WIKI_SPACE`; `FEISHU_DOC_OWNER_ID` for ownership transfer |
 | `feishu_notify` | DM summary via Feishu bot | `FEISHU_NOTIFY_USER_ID` |
 | `obsidian_git` | Commit to a GitHub repo | `OBSIDIAN_REPO`, `GITHUB_TOKEN` |
 | `agent` | Delegate to `claude -p` | `AGENT_DELIVERY_PROMPT` |
@@ -240,8 +240,8 @@ Then add `your_target` to `DELIVERY_TARGETS` in `.env`.
 1. **Record** on Apple Watch using Voice Memos (or any device)
 2. **iCloud syncs** the `.m4a` to `~/Library/Group Containers/group.com.apple.VoiceMemos.shared/Recordings/`
 3. **launchd detects** the new file via `WatchPaths`
-4. **妙记 (Volcano Lark Minutes)** transcribes with server-side speaker diarization (or the Gemini/OpenAI fallback), then Gemini summarizes the transcript
-5. **Delivery layer** sends the structured note to your configured targets
+4. **妙记 (Volcano Lark Minutes)** transcribes with server-side speaker diarization (or the Gemini/OpenAI fallback), then Gemini summarizes the transcript and names it
+5. **Delivery layer** sends the structured note — titled `YYYY-MM-DD HH:MM <AI topic>` so name-sorted lists order chronologically — to your configured targets
 
 ## Project structure
 
@@ -257,6 +257,7 @@ watch-transcriber/
 │   ├── feishu_notify.py       # Feishu bot DM with link to created doc
 │   ├── obsidian_git.py        # GitHub commit to Obsidian vault
 │   └── agent.py               # claude -p delegation (Feishu, Slack, etc.)
+├── scripts/backfill/          # One-off ops: AI-title backfill / retitle / Feishu doc cleanup
 ├── setup.sh                   # One-command install
 ├── com.watch-transcriber.plist # launchd template
 ├── .env.example               # Configuration template
