@@ -8,6 +8,11 @@ Requires lark-cli installed and authenticated:
 Config (in .env):
   FEISHU_FOLDER_TOKEN  — optional, parent folder token
   FEISHU_WIKI_SPACE    — optional, wiki space ID (use "my_library" for personal)
+  FEISHU_DOC_OWNER_ID  — optional, user open_id; when set, doc ownership is
+                         transferred to this user after creation (docs are
+                         otherwise owned by the lark-cli bot). The doc stays in
+                         FEISHU_FOLDER_TOKEN's folder across the transfer, and
+                         the bot keeps enough permission to manage it later.
 """
 
 import json
@@ -65,6 +70,22 @@ def deliver(note: dict) -> bool:
         note["feishu_doc_url"] = doc_url
 
     print(f"[delivery:feishu] created doc '{title}'")
-    if result.stdout.strip():
-        print(f"[delivery:feishu] {result.stdout.strip()}")
+
+    # Best-effort ownership transfer: delivery success is judged on doc
+    # creation; a failed transfer is logged loudly but never fails the note.
+    owner = os.environ.get("FEISHU_DOC_OWNER_ID", "")
+    if owner and doc_url:
+        token = doc_url.rsplit("/", 1)[-1]
+        xfer = subprocess.run(
+            ["lark-cli", "api", "POST",
+             f"/open-apis/drive/v1/permissions/{token}/members/transfer_owner",
+             "--params", '{"type":"docx"}',
+             "--data", json.dumps({"member_type": "openid", "member_id": owner})],
+            capture_output=True, text=True, timeout=30,
+        )
+        if xfer.returncode == 0 and '"ok": true' in (xfer.stdout or ""):
+            print(f"[delivery:feishu] ownership transferred to {owner}")
+        else:
+            print(f"[delivery:feishu] WARN: owner transfer failed: "
+                  f"{(xfer.stdout or xfer.stderr)[:200]}")
     return True
