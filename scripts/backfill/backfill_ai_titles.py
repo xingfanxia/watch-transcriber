@@ -121,6 +121,7 @@ def apple_notes_recreate(note: dict, old_title: str, ts_label: str) -> bool:
             if name of f is "{esc(folder)}" then
                 delete (every note of f whose name is "{esc(old_title)}")
                 delete (every note of f whose name ends with "({esc(ts_label)})")
+                delete (every note of f whose name begins with "{esc(ts_label)}")
                 exit repeat
             end if
         end repeat
@@ -181,7 +182,7 @@ def main():
             else:
                 result = summarize(client, transcript)
             note = transcribe.format_note(Path(m4a_name), result)
-            ts_label = note["title"].rsplit("(", 1)[-1].rstrip(")")
+            ts_label = datetime.fromisoformat(note["timestamp"]).strftime("%Y-%m-%d %H:%M")
             if not transcribe._clean_ai_title(result.get("title", "")):
                 raise ValueError("summarize returned no usable title")
             print(f"  new title: {note['title']}")

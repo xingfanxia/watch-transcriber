@@ -15,12 +15,12 @@ def deliver(note: dict) -> bool:
     path = output_dir / f"{safe_title}.md"
 
     # The AI-generated title part can differ between reprocess runs; the
-    # "(<timestamp>)" suffix is the deterministic per-recording key. Drop any
+    # leading timestamp is the deterministic per-recording key. Drop any
     # prior output for the same recording so reprocessing overwrites instead
     # of accumulating orphans.
-    suffix = re.search(r"\(([^()]*)\)$", safe_title)
-    if suffix:
-        for old in output_dir.glob(f"*({suffix.group(1)}).md"):
+    prefix = re.match(r"\d{4}-\d{2}-\d{2} \d{2}-\d{2}", safe_title)
+    if prefix:
+        for old in output_dir.glob(f"{prefix.group(0)}*.md"):
             if old != path:
                 old.unlink()
 

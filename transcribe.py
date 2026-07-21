@@ -1203,12 +1203,12 @@ def format_note(audio_path: Path, result: dict) -> dict:
         ts_label = name
         timestamp = datetime.now().isoformat()
 
-    # Content-first title so Apple Notes / Feishu lists are scannable; the
-    # timestamp suffix keeps same-day recordings unique and chronologically
-    # identifiable. Falls back to the old timestamp-only form when the
-    # summarize stage returned no usable title.
+    # Timestamp-first title ("2026-07-20 01:40 标题") so name-sorted lists
+    # (Feishu folder, Finder, Apple Notes) order chronologically; the AI part
+    # carries the content. Falls back to a generic label when the summarize
+    # stage returned no usable title.
     ai_title = _clean_ai_title(result.get("title", ""))
-    title = f"{ai_title} ({ts_label})" if ai_title else f"Voice Note {ts_label}"
+    title = f"{ts_label} {ai_title}" if ai_title else f"{ts_label} Voice Note"
 
     summary_en = result.get("summary_en", result.get("summary", ""))
     summary_zh = result.get("summary_zh", "")

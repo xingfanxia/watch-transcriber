@@ -42,7 +42,10 @@ def deliver(note: dict) -> bool:
     date_dir = _archive_root() / dt.strftime("%Y-%m-%d")
     date_dir.mkdir(parents=True, exist_ok=True)
 
-    recording_name = f"{dt.strftime('%H%M%S')}-{_slug(note['title'])}.md"
+    # The archive filename already carries HHMMSS; strip the title's leading
+    # timestamp so the slug doesn't duplicate the date.
+    display = re.sub(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}\s*", "", note["title"])
+    recording_name = f"{dt.strftime('%H%M%S')}-{_slug(display or note['title'])}.md"
     recording_path = date_dir / recording_name
     # AI titles can differ between reprocess runs; the HHMMSS prefix is the
     # deterministic key. Drop stale outputs for the same recording so the

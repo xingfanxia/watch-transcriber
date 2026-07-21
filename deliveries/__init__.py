@@ -4,8 +4,9 @@ Each delivery module must implement:
     deliver(note: dict) -> bool
 
 Where note has:
-    - title: str (AI-generated topic + timestamp, e.g. "项目排期讨论 (2026-03-29 21:25)";
-      falls back to "Voice Note 2026-03-29 21:25" when the summarize stage yields no title)
+    - title: str (timestamp + AI-generated topic, e.g. "2026-03-29 21:25 项目排期讨论"
+      so name-sorted lists order chronologically; falls back to
+      "2026-03-29 21:25 Voice Note" when the summarize stage yields no title)
     - transcript: str (raw transcript with timestamps/speakers)
     - summary: str (AI-generated summary, may be empty)
     - todos: list[str] (extracted action items, may be empty)
