@@ -7,6 +7,7 @@ Config (in .env):
 """
 
 import os
+import shutil
 import subprocess
 
 
@@ -16,9 +17,9 @@ def deliver(note: dict) -> bool:
         print("[delivery:feishu_notify] FEISHU_NOTIFY_USER_ID not set")
         return False
 
-    try:
-        subprocess.run(["lark-cli", "--version"], capture_output=True, timeout=5)
-    except FileNotFoundError:
+    # Existence check only — `lark-cli --version` phones home for update checks
+    # and can blow a 5s timeout on a slow network (same failure as feishu.py).
+    if not shutil.which("lark-cli"):
         print("[delivery:feishu_notify] lark-cli not found")
         return False
 
