@@ -17,6 +17,7 @@ Config (in .env):
 
 import json
 import os
+import shutil
 import subprocess
 
 
@@ -32,9 +33,10 @@ def _parse_doc_url(stdout: str) -> str:
 
 
 def deliver(note: dict) -> bool:
-    try:
-        subprocess.run(["lark-cli", "--version"], capture_output=True, timeout=5)
-    except FileNotFoundError:
+    # Existence check only — never spawn lark-cli for it: `--version` phones
+    # home for update checks and a slow network turns that into a spurious
+    # delivery failure (observed 2026-07-24: 5s timeout → doc never created).
+    if not shutil.which("lark-cli"):
         print("[delivery:feishu] lark-cli not found. Install: npm install -g @larksuite/cli")
         return False
 
@@ -73,13 +75,33 @@ def deliver(note: dict) -> bool:
 
     # Best-effort ownership transfer: delivery success is judged on doc
     # creation; a failed transfer is logged loudly but never fails the note.
+    # With a valid USER token lark-cli's auto identity creates the doc AS the
+    # user, so ownership is often already correct — check first and only
+    # transfer when the bot token created it (user token expired/absent).
     owner = os.environ.get("FEISHU_DOC_OWNER_ID", "")
     if owner and doc_url:
         token = doc_url.rsplit("/", 1)[-1]
+        meta = subprocess.run(
+            ["lark-cli", "api", "POST", "/open-apis/drive/v1/metas/batch_query",
+             "--data", json.dumps({"request_docs": [{"doc_token": token, "doc_type": "docx"}],
+                                   "with_url": False})],
+            capture_output=True, text=True, timeout=30,
+        )
+        try:
+            metas = json.loads(meta.stdout)["data"]["metas"]
+            if metas and metas[0].get("owner_id") == owner:
+                print(f"[delivery:feishu] doc already owned by {owner}")
+                return True
+        except (json.JSONDecodeError, KeyError, TypeError):
+            pass  # owner unknown — fall through and attempt the transfer
+        # --as bot is required: the doc's owner is the bot, and only the owner
+        # can transfer. lark-cli's "auto" identity prefers a valid USER token,
+        # which fails with 1063002 Permission denied (observed 2026-07-21+ once
+        # the user re-authorized and their token became valid).
         xfer = subprocess.run(
             ["lark-cli", "api", "POST",
              f"/open-apis/drive/v1/permissions/{token}/members/transfer_owner",
-             "--params", '{"type":"docx"}',
+             "--params", '{"type":"docx"}', "--as", "bot",
              "--data", json.dumps({"member_type": "openid", "member_id": owner})],
             capture_output=True, text=True, timeout=30,
         )
