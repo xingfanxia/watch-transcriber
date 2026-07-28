@@ -1,0 +1,65 @@
+name: release
+
+# Tag `v*` → build the universal macOS bundle of AX语音Vault and attach it to a
+# GitHub Release. Builds are ad-hoc signed (no Developer ID cert in CI) — the
+# release notes must carry the Gatekeeper bypass instructions; see README
+# "AX语音Vault — the desktop client".
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+
+      - name: npm install
+        working-directory: desktop
+        run: npm install
+
+      - name: Build universal bundle
+        working-directory: desktop
+        run: npm run tauri build -- --target universal-apple-darwin
+
+      - name: Rename artifact (ASCII, curl-friendly)
+        id: artifact
+        run: |
+          DMG=$(ls desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg)
+          VERSION="${GITHUB_REF_NAME#v}"
+          OUT="AX-Voice-Vault_${VERSION:-dev}_universal.dmg"
+          cp "$DMG" "$OUT"
+          echo "path=$OUT" >> "$GITHUB_OUTPUT"
+
+      - name: Upload to release (tag builds only)
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "$GITHUB_REF_NAME" "${{ steps.artifact.outputs.path }}" --clobber ||
+          gh release create "$GITHUB_REF_NAME" "${{ steps.artifact.outputs.path }}" \
+            --title "AX语音Vault $GITHUB_REF_NAME" --generate-notes
+
+      - name: Upload workflow artifact (dispatch builds)
+        if: "!startsWith(github.ref, 'refs/tags/')"
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.artifact.outputs.path }}
+          path: ${{ steps.artifact.outputs.path }}

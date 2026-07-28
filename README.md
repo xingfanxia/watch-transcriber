@@ -29,7 +29,9 @@ npm run tauri dev      # run against ../data
 npm run tauri build    # bundle a standalone AX语音Vault.app / .dmg
 ```
 
-> **Roadmap**: signed release builds distributed via GitHub Releases, so non-developers can download the app instead of building from source.
+Or skip the build: download the latest `AX-Voice-Vault_*_universal.dmg` (Apple Silicon + Intel) from [**GitHub Releases**](https://github.com/xingfanxia/watch-transcriber/releases). Releases are built by CI on every `v*` tag (`.github/workflows/release.yml`).
+
+> **Gatekeeper note**: release builds are ad-hoc signed, not notarized (no Developer ID certificate yet). On first launch macOS will refuse to open the app — go to System Settings → Privacy & Security → "Open Anyway", or clear the quarantine flag with `xattr -cr /Applications/AX语音Vault.app`. Signed + notarized builds are on the roadmap.
 
 ## Why This Approach
 
