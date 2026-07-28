@@ -59,10 +59,19 @@
 
   /* ---------- list ---------- */
   .list { overflow-y: auto; border-right: 1px solid var(--line); scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
-  .day { padding: 18px 22px 4px; position: sticky; top: 0; background: var(--bg);
-         font-family: var(--mono); font-size: 11px; color: var(--faint); letter-spacing: .08em; }
-  .day::after { content: ""; display: block; border-bottom: 1px solid var(--line); margin-top: 6px; }
-  .row { display: block; width: 100%; text-align: left; padding: 10px 22px 12px; border-left: 2px solid transparent; }
+  .day { padding: 18px 22px 8px; position: sticky; top: 0; background: var(--bg);
+         font-family: var(--mono); font-size: 11px; color: var(--faint); letter-spacing: .08em;
+         display: flex; align-items: center; justify-content: space-between; gap: 14px;
+         border-bottom: 1px solid var(--line); }
+  .day-axis { display: inline-flex; align-items: center; gap: 5px; }
+  .axis-l { font-size: 9px; color: var(--faint); letter-spacing: 0; }
+  .day-strip { position: relative; width: 130px; height: 4px; background: var(--panel-2);
+               border-radius: 2px; }
+  .day-strip::before { content: ""; position: absolute; left: 50%; top: -1px; bottom: -1px;
+                       width: 1px; background: var(--line); } /* 12:00 tick */
+  .day-strip i { position: absolute; top: -1px; width: 6px; height: 6px; margin-left: -3px;
+                 border-radius: 50%; background: var(--amber-deep); }
+  .row { display: block; width: 100%; text-align: left; padding: 12px 22px; border-left: 2px solid transparent; }
   .row:hover { background: var(--panel); }
   .row.on { background: var(--panel-2); border-left-color: var(--amber); }
   .row-top { display: flex; align-items: baseline; gap: 10px; }
@@ -70,13 +79,12 @@
   .row .ti { font-family: var(--serif); font-size: 15px; font-weight: 700; flex: 1;
              overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .row.on .ti { color: var(--ink); }
-  .row .dur { font-family: var(--mono); font-size: 10.5px; color: var(--faint); }
+  .row .dur { font-family: var(--mono); font-size: 10.5px; color: var(--faint); min-width: 44px; text-align: right; }
   .row .noaudio { font-size: 10px; color: var(--faint); border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; }
-  /* signature: 24h dial strip — the recording glows at its hour of day */
-  .dial { position: relative; height: 3px; margin-top: 8px; background: var(--panel-2); border-radius: 2px; overflow: visible; }
-  .dial i { position: absolute; top: 0; height: 3px; min-width: 3px; border-radius: 2px;
-            background: var(--tick); }
-  .row.on .dial i, .row:hover .dial i { background: var(--amber); box-shadow: 0 0 8px 1px var(--glow); }
+  .durbar { width: 56px; height: 3px; background: var(--panel-2); border-radius: 2px;
+            flex: none; overflow: hidden; }
+  .durbar i { display: block; height: 100%; border-radius: 2px; background: var(--tick); }
+  .row:hover .durbar i, .row.on .durbar i { background: var(--amber); }
   .empty { padding: 60px 24px; color: var(--faint); text-align: center; font-size: 13px; }
 
   /* ---------- detail ---------- */
@@ -291,20 +299,37 @@ function renderList() {
   if (!items.length) { list.append(el("div", "empty", "没有匹配的录音 — 换个词或清掉筛选试试")); return; }
   let day = null;
   for (const e of items) {
-    if (e.date !== day) { day = e.date; list.append(el("div", "day", `${e.date} ${e.weekday}`)); }
+    if (e.date !== day) {
+      day = e.date;
+      const head = el("div", "day");
+      head.append(el("span", null, `${e.date} ${e.weekday}`));
+      // Aggregate 24h axis: one dot per recording that day, labeled 0/12/24
+      // so the axis explains itself. This is where the day/night pattern
+      // lives — per-row it was just noise duplicating the HH:MM text.
+      const wrap = el("span", "day-axis");
+      const strip = el("span", "day-strip");
+      for (const r of items.filter(x => x.date === day)) {
+        const dot = el("i");
+        dot.style.left = (r.hour_frac / 24) * 100 + "%";
+        dot.title = `${r.time}${r.duration ? " · " + fmtDur(r.duration) : ""} ${r.ai_title}`;
+        strip.append(dot);
+      }
+      wrap.append(el("span", "axis-l", "0"), strip, el("span", "axis-l", "24"));
+      head.append(wrap);
+      list.append(head);
+    }
     const row = el("button", "row" + (state.sel === e.key ? " on" : ""));
     row.dataset.key = e.key;
     const top = el("div", "row-top");
     top.append(el("span", "t", e.time), el("span", "ti", e.ai_title));
-    if (e.audio) top.append(el("span", "dur", fmtDur(e.duration)));
-    else top.append(el("span", "noaudio", "无音频"));
-    const dial = el("div", "dial"), tick = el("i");
-    dial.title = `24小时刻度:${e.time} 开始` + (e.duration ? `,时长 ${fmtDur(e.duration)}(刻度位置=一天中的时刻,长度∝时长)` : "");
-    const startPct = (e.hour_frac / 24) * 100;
-    const widPct = Math.min(((e.duration || 60) / 86400) * 100 * 6, 100 - startPct); /* ×6 so a 1h note is visible */
-    tick.style.left = startPct + "%"; tick.style.width = Math.max(widPct, .35) + "%";
-    dial.append(tick);
-    row.append(top, dial);
+    if (e.audio) {
+      // Duration bar: longer bar = longer recording (√ scale, 2h caps it).
+      const bar = el("span", "durbar"), fill = el("i");
+      fill.style.width = Math.max(6, Math.sqrt(Math.min((e.duration || 0) / 7200, 1)) * 100) + "%";
+      bar.append(fill);
+      top.append(bar, el("span", "dur", fmtDur(e.duration)));
+    } else top.append(el("span", "noaudio", "无音频"));
+    row.append(top);
     row.onclick = () => select(e.key);
     list.append(row);
   }
