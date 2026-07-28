@@ -159,8 +159,7 @@
   .tr .ln { margin: 2px 0; }
   .tr .ts { color: var(--faint); padding: 0 2px; border-radius: 3px; }
   .tr button.ts:hover { color: var(--amber); background: var(--glow); }
-  .tr .sp { color: var(--amber-deep); }
-  .tr .sp.alt { color: var(--dim); }
+  .tr .sp { color: var(--amber-deep); } /* fallback; per-name color set inline */
   .tr .tx { color: var(--ink); }
   @media (prefers-color-scheme: light) { .player { box-shadow: 0 4px 14px rgba(90,70,30,.12); } }
 
@@ -214,6 +213,13 @@ const slotsOf = e => [...new Set([
   ...((e.transcript || "").match(/SPEAKER[_ ]?\d+/g) || []),
   ...Object.keys(e.speakers || {}),
 ])];
+/* Deterministic per-name color so 妍子/AX look the same in every recording. */
+const spkColor = name => {
+  let h = 0;
+  for (const c of String(name)) h = (h * 31 + c.codePointAt(0)) % 360;
+  const light = matchMedia("(prefers-color-scheme: light)").matches;
+  return `hsl(${h}, 55%, ${light ? 40 : 68}%)`;
+};
 const speakerNames = () => {
   const names = new Map();
   for (const e of DATA.entries)
@@ -313,8 +319,9 @@ function select(key) {
     for (const slot of slots) {
       const name = (e.speakers || {})[slot];
       const chip = el("button", "spk-chip" + (name ? " named" : ""));
-      chip.append(el("span", "sp-slot", slot.replace("SPEAKER_", "S")),
-                  el("span", null, name || "未标注"));
+      const label = el("span", null, name || "未标注");
+      if (name) { label.style.color = spkColor(name); chip.style.borderColor = spkColor(name); }
+      chip.append(el("span", "sp-slot", slot.replace("SPEAKER_", "S")), label);
       if (CAN_EDIT) chip.onclick = () => openSpeakerEditor(e, slot, chip);
       else chip.disabled = true;
       row.append(chip);
@@ -428,7 +435,6 @@ function buildPlayer(e) {
 const LINE_RE = /^\[(\d{2}):(\d{2}):(\d{2})[^\]]*\]\s*(SPEAKER[_ ]?\d+|[^:：]{1,20})?[:：]?\s*(.*)$/;
 function buildTranscript(e) {
   const box = el("div", "tr");
-  const speakers = new Map();
   for (const raw of e.transcript.split("\n")) {
     if (!raw.trim()) continue;
     const ln = el("div", "ln");
@@ -444,9 +450,10 @@ function buildTranscript(e) {
       } else ts = el("span", "ts", label);
       ln.append(ts);
       if (m[4]) {
-        if (!speakers.has(m[4])) speakers.set(m[4], speakers.size);
         const disp = (e.speakers || {})[m[4]] || m[4];
-        ln.append(el("span", "sp" + (speakers.get(m[4]) % 2 ? " alt" : ""), " " + disp + ": "));
+        const sp = el("span", "sp", " " + disp + ": ");
+        sp.style.color = spkColor(disp);
+        ln.append(sp);
       } else ln.append(document.createTextNode(" "));
       ln.append(el("span", "tx", m[5] || ""));
     } else ln.append(el("span", "tx", raw));
@@ -524,14 +531,32 @@ document.addEventListener("keydown", ev => {
 });
 $("#q").addEventListener("input", ev => { state.q = ev.target.value; renderList(); });
 
-/* Auto-refresh when the pipeline rebuilds the archive. Only meaningful when
-   served over http (the desktop app's loopback server); file:// can't fetch. */
+/* Live sync with the archive (http only — the desktop app; file:// can't
+   fetch). Speaker/category changes merge in place with no page reload — a
+   full reload (which loses scroll/selection) happens only when the entry
+   count changes, i.e. the pipeline delivered a new recording. */
 if (location.protocol.startsWith("http")) {
-  const stamp = () => fetch("manifest.json", { cache: "no-store" })
-    .then(r => r.headers.get("last-modified"));
-  stamp().then(t0 => setInterval(() =>
-    stamp().then(t => { if (t && t !== t0) location.reload(); }).catch(() => {}),
-    30000)).catch(() => {});
+  const sync = () => fetch("manifest.json", { cache: "no-store" })
+    .then(r => r.json())
+    .then(man => {
+      if (Object.keys(man).length !== DATA.entries.length) { location.reload(); return; }
+      let dirty = false;
+      for (const e of DATA.entries) {
+        const src = man[e.key];
+        if (!src) continue;
+        const spk = src.speakers || {};
+        if (JSON.stringify(spk) !== JSON.stringify(e.speakers || {})) { e.speakers = spk; dirty = true; }
+        if (src.category && src.category !== e.category) { e.category = src.category; dirty = true; }
+      }
+      if (dirty) {
+        const list = $("#list");
+        const st = list.scrollTop;
+        renderSide(); renderList();
+        list.scrollTop = st;
+      }
+    })
+    .catch(() => {});
+  setInterval(sync, 30000);
 }
 
 renderSide();
