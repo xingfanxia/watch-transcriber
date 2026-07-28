@@ -2,13 +2,34 @@
 
 [中文版](README.zh.md)
 
-Apple Watch voice transcription pipeline (~¥2/hour of audio via 妙记). Record on your wrist, get structured notes automatically.
+Apple Watch voice transcription pipeline (~¥2/hour of audio via 妙记). Record on your wrist, get structured notes automatically — then browse, play, and manage the whole archive in **AX语音Vault**, the bundled desktop app.
 
 ```
 Apple Watch (Voice Memos) → iCloud Sync → Mac detects new .m4a
   → 妙记 (Volcano Lark Minutes) STT — server-side diarization (Gemini/OpenAI fallback)
     → Pluggable delivery (Apple Notes, Feishu, Obsidian, custom)
+      → AX语音Vault desktop app (browse · play · tag speakers · manage)
 ```
+
+## AX语音Vault — the desktop client
+
+The pipeline's output isn't a pile of markdown you never open again — the repo ships a desktop app (`desktop/`, Tauri v2) that turns the local archive into a browsable, playable, manageable voice vault:
+
+- **Dark-mode archive UI** — AI titles, bilingual summaries, key points, and full diarized transcripts; search, topic + speaker filters, per-day rollups; tabbed detail pane (摘要/附注/转写, keys 1/2/3); click any transcript timestamp to seek the audio there. The page live-syncs when the pipeline delivers a new recording.
+- **Speaker tagging** — click a chip to name `SPEAKER_N`, batch-apply across the current filter, pick per-person colors; stacked facepile avatars on every row. Tags live in `manifest.json` (`speakers`), survive reprocessing, auto commit+push to the private notes repo, and are written back into the note files' transcript labels (`scripts/ops/apply_speakers.py`, reversible via `speakers_applied`).
+- **Markdown attachments** — paste or pick a `.md`/`.txt` per recording (an AI analysis of the conversation, meeting context, anything); stored under `data/<date>/<HHMMSS>-attachments/`, tracked in the manifest, rendered in-app. `scripts/ops/import_gpt_thread.py <export.json>` bulk-imports a ChatGPT export (all branches, three historical upload-filename formats): it attaches each recording's analysis and auto-extracts "who is SPEAKER_N" into tags (never overwriting manual ones). Idempotent.
+- **Safe delete** — a two-step 删除 button (or `scripts/ops/delete_recording.py`) removes the note, audio copy, attachments, manifest entry, by-topic links, and R2 backup object, and refreshes the daily rollup — then commits/pushes. Voice Memos originals and Apple Notes/飞书 copies are deliberately untouched; git history keeps notes recoverable.
+- **Local-first, yours** — a thin Rust shell: a loopback axum server serves `data/` (HTTP Range → audio seeking) and the webview loads the same generated `index.html` the pipeline builds — no second viewer implementation, no cloud, no account. The only places data goes are the private backups you configured. `WATCH_TRANSCRIBER_DATA` overrides the archive location.
+- **Fresh machine in minutes** — clone this repo and open the app: it shows a bootstrap page until `python3 scripts/ops/restore_archive.py` rebuilds `data/` (clones your private notes repo, pulls audio back from R2, seeds the upload ledger, rebuilds the viewer), then continues automatically.
+
+```bash
+cd desktop
+npm install
+npm run tauri dev      # run against ../data
+npm run tauri build    # bundle a standalone AX语音Vault.app / .dmg
+```
+
+> **Roadmap**: signed release builds distributed via GitHub Releases, so non-developers can download the app instead of building from source.
 
 ## Why This Approach
 
@@ -190,16 +211,6 @@ Available deliveries:
 | Notes + manifest, versioned | **private** `github.com/xingfanxia/watch-transcriber-data` | nested git repo inside `data/`; `archive_git` auto-commits + pushes per recording |
 | Audio (AI-titled copies) | **private** Cloudflare R2 bucket `watch-transcriber-audio` | `r2_backup` per recording; catch-up via `scripts/backfill/backfill_r2_audio.py` (ledger: `state/r2_uploaded.json`) |
 | Originals | Voice Memos + iCloud | never touched by the pipeline |
-
-### Desktop app (Tauri)
-
-`desktop/` is a thin Rust shell: a loopback axum server serves `data/` (with HTTP Range, so audio seeking works) and a webview opens the same generated `index.html` — no second viewer implementation. `cd desktop && npm run tauri dev` to run, `npm run tauri build` to bundle; `WATCH_TRANSCRIBER_DATA` overrides the archive location.
-
-- **Speaker tagging** (app-only — needs the loopback API): click a speaker chip in the detail pane to name `SPEAKER_N`, optionally batch-apply to every recording in the current filter; tags land in `manifest.json` (`speakers` field), are preserved across reprocesses, auto-commit + push to the private notes repo, and power the 说话人 sidebar filter + transcript display. Tags are also written back into the note files' transcript labels (`scripts/ops/apply_speakers.py`, reversible via the manifest's `speakers_applied`). The page auto-refreshes when the pipeline rebuilds the archive.
-- **Markdown attachments**: paste or pick a `.md`/`.txt` in the detail pane's 附注 tab — stored as `data/<date>/<HHMMSS>-attachments/*.md`, listed in the manifest, rendered in-app (vendored `marked`), and pushed to the private repo like everything else. The detail pane is tabbed 摘要/附注/转写 (keys 1/2/3).
-- **Delete**: the detail pane's two-step 删除 button (or `scripts/ops/delete_recording.py`) removes the note, audio copy, attachments, manifest entry, by-topic links, R2 backup object, and refreshes the daily rollup — then commits/pushes. Voice Memos originals and Apple Notes/飞书 copies are deliberately untouched; git history keeps the note recoverable.
-- **GPT thread import**: `scripts/ops/import_gpt_thread.py <export.json>` scans a ChatGPT export (all branches), maps uploaded transcript files back to recordings (three historical filename formats), attaches each recording's GPT analysis as a markdown note, and extracts "who is SPEAKER_N" from the analysis into speaker tags (never overwriting manual ones). Idempotent.
-- **Fresh machine**: clone this repo, open the app — it shows a bootstrap page until `python3 scripts/ops/restore_archive.py` restores `data/` (clones the private notes repo, pulls all audio back from R2, seeds the upload ledger, rebuilds the viewer), then continues automatically.
 
 ### Agent delivery examples
 

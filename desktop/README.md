@@ -15,4 +15,4 @@ npm run tauri build          # bundle AX语音Vault.app / .dmg
 `WATCH_TRANSCRIBER_DATA` overrides the archive location; otherwise the app
 walks up from its executable to find the enclosing clone's `data/`. On a
 machine with no archive yet it shows a bootstrap page — see the repo README's
-"Desktop app" section for the restore/first-run flows.
+"AX语音Vault — the desktop client" section for the restore/first-run flows.

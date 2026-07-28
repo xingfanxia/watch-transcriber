@@ -2,13 +2,34 @@
 
 [English](README.md)
 
-Apple Watch 语音转文字流水线（妙记转写约 2 元/小时）。手腕上录音，自动生成结构化笔记。
+Apple Watch 语音转文字流水线（妙记转写约 2 元/小时）。手腕上录音，自动生成结构化笔记——再用自带的桌面 App **AX语音Vault** 浏览、播放、管理整个档案。
 
 ```
 Apple Watch (语音备忘录) → iCloud 同步 → Mac 检测新 .m4a
   → 妙记（火山 Lark Minutes）语音识别 — 服务端说话人分离（Gemini/OpenAI 兜底）
     → 可插拔投递层 (Apple Notes、飞书、Obsidian、自定义)
+      → AX语音Vault 桌面 App（浏览 · 播放 · 说话人标注 · 管理）
 ```
+
+## AX语音Vault —— 桌面客户端
+
+流水线的产出不是一堆再也不会打开的 markdown —— 仓库自带一个桌面 App（`desktop/`，Tauri v2），把本地档案变成可浏览、可播放、可管理的语音金库：
+
+- **暗色档案 UI** —— AI 标题、双语摘要、要点、完整分说话人转写；搜索、话题 + 说话人筛选、按天汇总；详情页分 摘要/附注/转写 三个 tab（快捷键 1/2/3）；点转写里任意时间戳，音频直接跳到那一刻。pipeline 投递新录音后页面自动同步。
+- **说话人标注** —— 点芯片给 `SPEAKER_N` 命名，可批量应用到当前筛选，支持自选人物颜色；每行显示层叠的头像堆。标注存进 `manifest.json` 的 `speakers` 字段，reprocess 不丢，自动 commit+push 到私有笔记仓库，并回写进笔记文件的转写标签（`scripts/ops/apply_speakers.py`，借 `speakers_applied` 可逆）。
+- **Markdown 附注** —— 每条录音可粘贴或选择 `.md`/`.txt`（对话的 AI 分析、会议背景，随便什么）；存在 `data/<日期>/<HHMMSS>-attachments/`，记入 manifest，app 内渲染。`scripts/ops/import_gpt_thread.py <export.json>` 批量导入 ChatGPT 导出（含全部分支，兼容三代历史上传文件名）：给每条录音挂上对应分析，并自动提取「SPEAKER_N 是谁」打标（绝不覆盖手工标注）。幂等可重跑。
+- **安全删除** —— 两步确认的「删除」按钮（或 `scripts/ops/delete_recording.py`）移除笔记、音频拷贝、附注、manifest 条目、by-topic 链接和 R2 备份对象，刷新当日汇总，然后自动 commit+push。Voice Memos 原件和 Apple Notes/飞书分身有意不动；git 历史里随时可恢复。
+- **本地优先，数据归你** —— 薄 Rust 壳：环回 axum 服务器伺服 `data/`（HTTP Range → 音频可拖进度），webview 加载 pipeline 生成的同一个 `index.html` —— 不存在第二份 viewer 实现，无云端、无账号。数据只去你自己配置的私有备份。`WATCH_TRANSCRIBER_DATA` 可覆盖档案位置。
+- **新机器几分钟就位** —— clone 本仓库直接开 app：档案缺失时显示引导页，跑一次 `python3 scripts/ops/restore_archive.py`（克隆私有笔记仓库、从 R2 拉回全部音频、seed 上传账本、重建 viewer）后自动进入。
+
+```bash
+cd desktop
+npm install
+npm run tauri dev      # 对 ../data 运行
+npm run tauri build    # 打包独立的 AX语音Vault.app / .dmg
+```
+
+> **路线图**：签名的 release build 走 GitHub Releases 分发，让非开发者直接下载使用、无需从源码构建。
 
 ## 为什么选这个方案
 
@@ -176,16 +197,6 @@ DELIVERY_TARGETS=file,apple_notes
 | 笔记 + manifest(带版本史) | **私有** `github.com/xingfanxia/watch-transcriber-data` | `data/` 内嵌套 git 仓库;`archive_git` 每条录音自动 commit + push |
 | 音频(AI 标题拷贝) | **私有** Cloudflare R2 bucket `watch-transcriber-audio` | `r2_backup` 每条录音上传;补传 `scripts/backfill/backfill_r2_audio.py`(账本 `state/r2_uploaded.json`) |
 | 原件 | Voice Memos + iCloud | pipeline 从不触碰 |
-
-### 桌面 App(Tauri)
-
-`desktop/` 是薄壳:环回 axum 服务器伺服 `data/`(带 HTTP Range,音频可拖进度),webview 加载同一个生成的 `index.html` —— 不存在第二份 viewer 实现。`cd desktop && npm run tauri dev` 运行,`npm run tauri build` 打包;`WATCH_TRANSCRIBER_DATA` 可覆盖档案位置。
-
-- **说话人标注**(仅 app 内可编辑,走环回 API):详情页点说话人芯片给 `SPEAKER_N` 命名,可一键批量应用到当前筛选的全部录音;标注存进 `manifest.json` 的 `speakers` 字段,reprocess 不会丢,自动 commit+push 到私有笔记仓库,并驱动侧栏「说话人」筛选和转写显示。标注同时**回写进笔记文件的转写标签**(`scripts/ops/apply_speakers.py`,借 manifest 的 `speakers_applied` 可逆改名/清除)。pipeline 重建档案后页面自动刷新。
-- **Markdown 附注**:详情页「附注」tab 粘贴或选择 `.md`/`.txt` 文件 —— 存为 `data/<日期>/<HHMMSS>-attachments/*.md`,记录进 manifest,app 内渲染(vendor 的 `marked`),与其余数据一样推送私有仓库。详情页分 摘要/附注/转写 三个 tab(快捷键 1/2/3)。
-- **删除**:详情页两步确认的「删除」按钮(或 `scripts/ops/delete_recording.py`)—— 移除笔记、音频拷贝、附注、manifest 条目、by-topic 链接、R2 备份对象并刷新当日汇总,然后自动 commit+push。Voice Memos 原件和 Apple Notes/飞书分身有意不动;私有仓库 git 历史里随时可恢复。
-- **GPT 对话导入**:`scripts/ops/import_gpt_thread.py <export.json>` 扫描 ChatGPT 导出(含全部分支),把上传过的转写文件映射回录音(兼容三代历史文件名),给每条录音挂上对应的 GPT 分析附注,并从分析中提取「SPEAKER_N 是谁」自动打标(绝不覆盖手工标注)。幂等可重跑。
-- **新机器**:clone 本仓库直接开 app —— 档案缺失时显示引导页,跑一次 `python3 scripts/ops/restore_archive.py`(克隆私有笔记仓库、从 R2 拉回全部音频、seed 上传账本、重建 viewer)后自动进入。
 
 ### Agent 投递示例
 
