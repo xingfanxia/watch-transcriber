@@ -63,14 +63,7 @@
          font-family: var(--mono); font-size: 11px; color: var(--faint); letter-spacing: .08em;
          display: flex; align-items: center; justify-content: space-between; gap: 14px;
          border-bottom: 1px solid var(--line); }
-  .day-axis { display: inline-flex; align-items: center; gap: 5px; }
-  .axis-l { font-size: 9px; color: var(--faint); letter-spacing: 0; }
-  .day-strip { position: relative; width: 130px; height: 4px; background: var(--panel-2);
-               border-radius: 2px; }
-  .day-strip::before { content: ""; position: absolute; left: 50%; top: -1px; bottom: -1px;
-                       width: 1px; background: var(--line); } /* 12:00 tick */
-  .day-strip i { position: absolute; top: -1px; width: 6px; height: 6px; margin-left: -3px;
-                 border-radius: 50%; background: var(--amber-deep); }
+  .day-sum { color: var(--faint); letter-spacing: .02em; }
   .row { display: block; width: 100%; text-align: left; padding: 12px 22px; border-left: 2px solid transparent; }
   .row:hover { background: var(--panel); }
   .row.on { background: var(--panel-2); border-left-color: var(--amber); }
@@ -79,12 +72,11 @@
   .row .ti { font-family: var(--serif); font-size: 15px; font-weight: 700; flex: 1;
              overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .row.on .ti { color: var(--ink); }
-  .row .dur { font-family: var(--mono); font-size: 10.5px; color: var(--faint); min-width: 44px; text-align: right; }
+  .row .dur { font-size: 11.5px; flex: none; }
+  .row .dur.short { color: var(--faint); }
+  .row .dur.mid { color: var(--dim); }
+  .row .dur.long { color: var(--ink); font-weight: 500; }
   .row .noaudio { font-size: 10px; color: var(--faint); border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; }
-  .durbar { width: 56px; height: 3px; background: var(--panel-2); border-radius: 2px;
-            flex: none; overflow: hidden; }
-  .durbar i { display: block; height: 100%; border-radius: 2px; background: var(--tick); }
-  .row:hover .durbar i, .row.on .durbar i { background: var(--amber); }
   .empty { padding: 60px 24px; color: var(--faint); text-align: center; font-size: 13px; }
 
   /* ---------- detail ---------- */
@@ -223,6 +215,15 @@ const fmtDur = s => {
   const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60;
   return h ? `${h}:${String(m).padStart(2,"0")}:${String(x).padStart(2,"0")}` : `${m}:${String(x).padStart(2,"0")}`;
 };
+/* Human units for list display — "1小时16分" needs no mental conversion. */
+const fmtDurCN = s => {
+  if (s == null) return "";
+  s = Math.round(s);
+  if (s < 60) return `${s}秒`;
+  const h = Math.floor(s / 3600), m = Math.round(s % 3600 / 60);
+  return h ? `${h}小时${m ? m + "分" : ""}` : `${m}分`;
+};
+const durClass = s => s >= 2700 ? "long" : s >= 600 ? "mid" : "short";
 
 let state = { cat: null, spk: null, q: "", sel: null, tab: "summary" };
 /* Editing needs the desktop app's loopback API; file:// stays read-only. */
@@ -301,21 +302,12 @@ function renderList() {
   for (const e of items) {
     if (e.date !== day) {
       day = e.date;
+      const todays = items.filter(x => x.date === day);
+      const total = todays.reduce((a, x) => a + (x.duration || 0), 0);
       const head = el("div", "day");
       head.append(el("span", null, `${e.date} ${e.weekday}`));
-      // Aggregate 24h axis: one dot per recording that day, labeled 0/12/24
-      // so the axis explains itself. This is where the day/night pattern
-      // lives — per-row it was just noise duplicating the HH:MM text.
-      const wrap = el("span", "day-axis");
-      const strip = el("span", "day-strip");
-      for (const r of items.filter(x => x.date === day)) {
-        const dot = el("i");
-        dot.style.left = (r.hour_frac / 24) * 100 + "%";
-        dot.title = `${r.time}${r.duration ? " · " + fmtDur(r.duration) : ""} ${r.ai_title}`;
-        strip.append(dot);
-      }
-      wrap.append(el("span", "axis-l", "0"), strip, el("span", "axis-l", "24"));
-      head.append(wrap);
+      head.append(el("span", "day-sum",
+        `${todays.length} 条${total ? " · " + fmtDurCN(total) : ""}`));
       list.append(head);
     }
     const row = el("button", "row" + (state.sel === e.key ? " on" : ""));
@@ -323,11 +315,9 @@ function renderList() {
     const top = el("div", "row-top");
     top.append(el("span", "t", e.time), el("span", "ti", e.ai_title));
     if (e.audio) {
-      // Duration bar: longer bar = longer recording (√ scale, 2h caps it).
-      const bar = el("span", "durbar"), fill = el("i");
-      fill.style.width = Math.max(6, Math.sqrt(Math.min((e.duration || 0) / 7200, 1)) * 100) + "%";
-      bar.append(fill);
-      top.append(bar, el("span", "dur", fmtDur(e.duration)));
+      const dur = el("span", "dur " + durClass(e.duration || 0), fmtDurCN(e.duration));
+      dur.title = fmtDur(e.duration);
+      top.append(dur);
     } else top.append(el("span", "noaudio", "无音频"));
     row.append(top);
     row.onclick = () => select(e.key);
