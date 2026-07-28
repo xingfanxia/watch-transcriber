@@ -84,8 +84,9 @@ def deliver(note: dict) -> bool:
     }
     # User-authored fields (desktop app writes them) survive a reprocess.
     prior = manifest.get(key) or {}
-    if prior.get("speakers"):
-        entry["speakers"] = prior["speakers"]
+    for field in ("speakers", "speakers_applied", "attachments"):
+        if prior.get(field):
+            entry[field] = prior[field]
     manifest[key] = entry
     save(manifest)
     rebuild_views(manifest)

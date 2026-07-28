@@ -73,10 +73,97 @@ async fn save_speakers(
     std::fs::write(&tmp, pretty + "\n").map_err(|e| err500(e.to_string()))?;
     std::fs::rename(&tmp, &path).map_err(|e| err500(e.to_string()))?;
 
-    let msg = format!("speakers: {} ({} entries)", summary.join(", "), updates.len());
+    let keys: Vec<String> = updates
+        .iter()
+        .filter_map(|u| u.get("key").and_then(Value::as_str).map(String::from))
+        .collect();
+    let label = if summary.is_empty() { "cleared".into() } else { summary.join(", ") };
+    let msg = format!("speakers: {} ({} entries)", label, updates.len());
     let repo = dir.clone();
-    std::thread::spawn(move || git_commit_push(&repo, &msg));
+    std::thread::spawn(move || {
+        // Map the tags into the transcript .md files (also rebuilds the
+        // viewer), then persist everything to the private notes repo.
+        if let Some(root) = repo.parent() {
+            let _ = std::process::Command::new("python3")
+                .arg("scripts/ops/apply_speakers.py")
+                .args(&keys)
+                .current_dir(root)
+                .output();
+        }
+        git_commit_push(&repo, &msg);
+    });
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// Attach a markdown note to a recording: writes
+/// data/<date>/<HHMMSS>-attachments/<name>.md, records it in the manifest
+/// entry's `attachments` list, rebuilds the viewer, pushes the notes repo.
+async fn save_attachment(
+    State(dir): State<PathBuf>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let err500 = |e: String| (StatusCode::INTERNAL_SERVER_ERROR, e);
+    let bad = |m: &str| (StatusCode::BAD_REQUEST, m.to_string());
+    let key = body.get("key").and_then(Value::as_str).ok_or(bad("missing key"))?;
+    let content = body.get("content").and_then(Value::as_str).ok_or(bad("missing content"))?;
+    let raw_name = body.get("name").and_then(Value::as_str).unwrap_or("附注");
+
+    // Whitelist-sanitize the filename (mirrors deliveries.safe_filename).
+    let mut name: String = raw_name
+        .chars()
+        .filter(|c| c.is_alphanumeric() || " ()._-".contains(*c) || ('一'..='鿿').contains(c))
+        .collect();
+    name = name.trim().trim_matches('.').to_string();
+    if name.is_empty() {
+        name = "附注".into();
+    }
+    let name = name.strip_suffix(".md").unwrap_or(&name).to_string();
+
+    let (date, hhmmss) = key.split_once(' ').ok_or(bad("bad key"))?;
+    let att_dir = dir.join(date).join(format!("{hhmmss}-attachments"));
+    std::fs::create_dir_all(&att_dir).map_err(|e| err500(e.to_string()))?;
+    let mut path = att_dir.join(format!("{name}.md"));
+    let mut n = 2;
+    while path.exists() {
+        path = att_dir.join(format!("{name}-{n}.md"));
+        n += 1;
+    }
+    std::fs::write(&path, content).map_err(|e| err500(e.to_string()))?;
+    let rel = format!(
+        "{date}/{hhmmss}-attachments/{}",
+        path.file_name().unwrap().to_string_lossy()
+    );
+
+    let manifest_path = dir.join("manifest.json");
+    let raw = std::fs::read_to_string(&manifest_path).map_err(|e| err500(e.to_string()))?;
+    let mut manifest: Value = serde_json::from_str(&raw).map_err(|e| err500(e.to_string()))?;
+    let entry = manifest
+        .get_mut(key)
+        .and_then(Value::as_object_mut)
+        .ok_or(bad("unknown key"))?;
+    let list = entry
+        .entry("attachments")
+        .or_insert_with(|| Value::Array(vec![]));
+    if let Some(list) = list.as_array_mut() {
+        list.push(Value::String(rel.clone()));
+    }
+    let tmp = manifest_path.with_extension("json.tmp");
+    let pretty = serde_json::to_string_pretty(&manifest).map_err(|e| err500(e.to_string()))?;
+    std::fs::write(&tmp, pretty + "\n").map_err(|e| err500(e.to_string()))?;
+    std::fs::rename(&tmp, &manifest_path).map_err(|e| err500(e.to_string()))?;
+
+    let repo = dir.clone();
+    let msg = format!("attach: {rel}");
+    std::thread::spawn(move || {
+        if let Some(root) = repo.parent() {
+            let _ = std::process::Command::new("python3")
+                .args(["-m", "deliveries.viewer"])
+                .current_dir(root)
+                .output();
+        }
+        git_commit_push(&repo, &msg);
+    });
+    Ok(Json(serde_json::json!({ "ok": true, "rel": rel })))
 }
 
 /// Best-effort persistence to the private notes repo; offline is fine — the
@@ -130,6 +217,7 @@ pub fn run() {
                             Html(include_str!("bootstrap.html"))
                         }))
                         .route("/api/speakers", post(save_speakers))
+                        .route("/api/attachments", post(save_attachment))
                         .fallback_service(ServeDir::new(dir.clone()))
                         .with_state(dir);
                     axum::serve(listener, router).await.expect("archive server");

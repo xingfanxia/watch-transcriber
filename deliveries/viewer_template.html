@@ -113,6 +113,33 @@
              padding: 6px 12px; font-size: 12px; }
   .spk-btn:hover { border-color: var(--amber); color: var(--amber); }
   .spk-hint { flex-basis: 100%; font-size: 11px; color: var(--faint); }
+  .att { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+         margin: 10px 0; overflow: hidden; }
+  .att summary { cursor: pointer; padding: 10px 16px; font-size: 13px; color: var(--dim); }
+  .att[open] summary { color: var(--ink); border-bottom: 1px solid var(--line); }
+  .att-empty { color: var(--faint); font-size: 12px; }
+  .md-body { padding: 6px 18px 16px; font-size: 13.5px; max-width: 72ch; overflow-x: auto; }
+  .md-body h1, .md-body h2, .md-body h3 { margin: 16px 0 8px; line-height: 1.4; }
+  .md-body h1 { font-size: 17px; } .md-body h2 { font-size: 15px; } .md-body h3 { font-size: 14px; }
+  .md-body p, .md-body li { margin: 6px 0; color: var(--ink); }
+  .md-body ul, .md-body ol { padding-left: 22px; }
+  .md-body code { font-family: var(--mono); font-size: .88em; background: var(--panel-2);
+                  padding: 1px 5px; border-radius: 4px; }
+  .md-body pre { background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+                 padding: 10px 14px; overflow-x: auto; }
+  .md-body pre code { background: none; padding: 0; }
+  .md-body blockquote { border-left: 3px solid var(--line); padding-left: 12px; color: var(--dim); margin: 8px 0; }
+  .md-body table { border-collapse: collapse; margin: 10px 0; font-size: 12.5px; }
+  .md-body th, .md-body td { border: 1px solid var(--line); padding: 5px 10px; text-align: left; }
+  .md-body th { background: var(--panel-2); }
+  .md-body a { color: var(--amber); }
+  .att-editor { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+  .att-editor .att-name { flex-basis: 100%; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 8px; color: var(--ink); font: 13px var(--sans); padding: 6px 10px; max-width: 320px; }
+  .att-editor .att-text { flex-basis: 100%; min-height: 72px; background: var(--panel);
+    border: 1px solid var(--line); border-radius: 10px; color: var(--ink);
+    font: 12.5px var(--mono); padding: 8px 12px; resize: vertical; }
+  .att-editor input:focus, .att-editor textarea:focus { outline: none; border-color: var(--amber-deep); }
   .sec { font-family: var(--mono); font-size: 11px; color: var(--faint); letter-spacing: .14em; margin: 26px 0 10px; }
   .sec::after { content: ""; display: inline-block; width: 40px; border-bottom: 1px solid var(--line); margin-left: 10px; vertical-align: middle; }
   .d-sum { color: var(--ink); max-width: 62ch; }
@@ -158,6 +185,7 @@
   <section class="detail" id="detail"><div class="placeholder">选择一条录音开始</div></section>
 </div>
 <audio id="audio" preload="none"></audio>
+<script src="marked.min.js"></script>
 <script id="payload" type="application/json">__PAYLOAD__</script>
 <script>
 "use strict";
@@ -176,7 +204,10 @@ let state = { cat: null, spk: null, q: "", sel: null };
 /* Editing needs the desktop app's loopback API; file:// stays read-only. */
 const CAN_EDIT = location.protocol.startsWith("http");
 
-const slotsOf = e => [...new Set((e.transcript || "").match(/SPEAKER[_ ]?\d+/g) || [])];
+const slotsOf = e => [...new Set([
+  ...((e.transcript || "").match(/SPEAKER[_ ]?\d+/g) || []),
+  ...Object.keys(e.speakers || {}),
+])];
 const speakerNames = () => {
   const names = new Map();
   for (const e of DATA.entries)
@@ -304,12 +335,60 @@ function select(key) {
     e.todos.forEach(k => ul.append(el("li", null, k)));
     pad.append(ul);
   }
+  pad.append(el("div", "sec", "附注"));
+  for (const att of e.attachments || []) {
+    const box = el("details", "att");
+    box.append(el("summary", null, att.name));
+    const body = el("div", "md-body");
+    body.innerHTML = window.marked ? marked.parse(att.content) : "";
+    if (!window.marked) body.textContent = att.content;
+    box.append(body);
+    pad.append(box);
+  }
+  if (!(e.attachments || []).length) pad.append(el("p", "att-empty", "暂无附注"));
+  if (CAN_EDIT) pad.append(buildAttachEditor(e));
+
   if (e.transcript) {
     pad.append(el("div", "sec", "转写"));
     pad.append(buildTranscript(e));
   }
   d.append(pad);
   d.scrollTop = 0;
+}
+
+function buildAttachEditor(e) {
+  const box = el("div", "att-editor");
+  const name = el("input", "att-name");
+  name.placeholder = "附注标题(可选)";
+  const ta = el("textarea", "att-text");
+  ta.placeholder = "粘贴 markdown…";
+  const send = el("button", "spk-btn", "附上");
+  const pick = el("button", "spk-btn", "选择 .md 文件");
+  const file = el("input"); file.type = "file"; file.accept = ".md,.txt"; file.hidden = true;
+  const post = (attName, content) => {
+    if (!content.trim()) return;
+    fetch("/api/attachments", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key: e.key, name: attName || "附注", content }),
+    }).then(r => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then(res => {
+        (e.attachments = e.attachments || []).push({
+          name: res.rel.split("/").pop().replace(/\.md$/, ""), rel: res.rel, content,
+        });
+        select(e.key);
+      })
+      .catch(err => { ta.placeholder = "保存失败: " + err.message; });
+  };
+  send.onclick = () => post(name.value.trim(), ta.value);
+  pick.onclick = () => file.click();
+  file.onchange = () => {
+    const f = file.files[0];
+    if (!f) return;
+    f.text().then(txt => post(f.name.replace(/\.(md|txt)$/, ""), txt));
+  };
+  box.append(name, ta, el("div", "att-actions"), send, pick, file);
+  return box;
 }
 
 function buildPlayer(e) {

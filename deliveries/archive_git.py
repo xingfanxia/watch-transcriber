@@ -25,6 +25,7 @@ by-topic/
 daily.md
 daily.html
 index.html
+marked.min.js
 """
 
 

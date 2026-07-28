@@ -12,6 +12,7 @@ runnable manually:
 import json
 import os
 import re
+import shutil
 from datetime import date
 from pathlib import Path
 
@@ -69,8 +70,23 @@ def _parse_note(md_path: Path) -> dict:
     }
 
 
+def _load_attachments(root: Path, entry: dict) -> list:
+    out = []
+    for rel in entry.get("attachments") or []:
+        p = root / rel
+        if p.exists():
+            out.append({"name": p.stem, "rel": rel,
+                        "content": p.read_text(encoding="utf-8")})
+    return out
+
+
 def build() -> Path:
     root = archive_root()
+    # marked.min.js is served/bundled next to index.html so attachment
+    # markdown renders identically over http and file://.
+    vendor = Path(__file__).with_name("vendor") / "marked.min.js"
+    if vendor.exists():
+        shutil.copy2(vendor, root / "marked.min.js")
     entries = []
     for key, entry in sorted(manifest_mod.load().items(), reverse=True):
         md_path = root / entry["note"] if entry.get("note") else None
@@ -91,6 +107,7 @@ def build() -> Path:
             "original": entry.get("original"),
             "audio": entry.get("audio"),
             "speakers": entry.get("speakers") or {},
+            "attachments": _load_attachments(root, entry),
             **parsed,
         })
 

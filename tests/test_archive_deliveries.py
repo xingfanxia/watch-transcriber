@@ -197,6 +197,45 @@ def test_manifest_preserves_user_speakers_on_reprocess(archive, tmp_path):
     assert manifest.load()["2026-07-26 013421"]["speakers"] == {"SPEAKER_1": "AX"}
 
 
+def test_apply_speakers_rewrites_and_reverts(archive, tmp_path):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts" / "ops"))
+    from apply_speakers import apply_keys
+
+    note = _note(tmp_path)
+    day = archive / "2026-07-26"
+    day.mkdir()
+    md = day / "013421-银发大基建中控平台合作.md"
+    md.write_text(
+        "# t\n\n## Transcript\n\n```\n"
+        "[00:00:01 - 00:00:02] SPEAKER_1: 你好\n"
+        "[00:00:03 - 00:00:04] SPEAKER_2: 嗯\n```\n",
+        encoding="utf-8",
+    )
+    manifest.deliver(note)
+    m = manifest.load()
+    key = "2026-07-26 013421"
+    m[key]["speakers"] = {"SPEAKER_1": "妍子"}
+    manifest.save(m)
+
+    assert apply_keys([key], rebuild_viewer=False) == 1
+    text = md.read_text(encoding="utf-8")
+    assert "] 妍子: 你好" in text and "SPEAKER_2: 嗯" in text
+    assert manifest.load()[key]["speakers_applied"] == {"SPEAKER_1": "妍子"}
+    # Idempotent second run, then rename, then clear back to the raw slot.
+    assert apply_keys([key], rebuild_viewer=False) == 0
+    m = manifest.load()
+    m[key]["speakers"] = {"SPEAKER_1": "AX"}
+    manifest.save(m)
+    apply_keys([key], rebuild_viewer=False)
+    assert "] AX: 你好" in md.read_text(encoding="utf-8")
+    m = manifest.load()
+    m[key]["speakers"] = {}
+    manifest.save(m)
+    apply_keys([key], rebuild_viewer=False)
+    assert "] SPEAKER_1: 你好" in md.read_text(encoding="utf-8")
+    assert "speakers_applied" not in manifest.load()[key]
+
+
 def test_manifest_missing_audio_is_null(archive, tmp_path):
     note = _note(tmp_path)  # audio_path doesn't exist, no copy made
     day = archive / "2026-07-26"
