@@ -39,7 +39,7 @@ npm run tauri build    # bundle a standalone EchoWall.app / .dmg
 
 Or skip the build: download the latest `EchoWall_*_universal.dmg` (Apple Silicon + Intel) from [**GitHub Releases**](https://github.com/xingfanxia/watch-transcriber/releases). Releases are built by CI on every `v*` tag (`.github/workflows/release.yml`).
 
-> **Gatekeeper note**: release builds are ad-hoc signed, not notarized (no Developer ID certificate yet). On first launch macOS will refuse to open the app — go to System Settings → Privacy & Security → "Open Anyway", or clear the quarantine flag with `xattr -cr /Applications/EchoWall.app`. Signed + notarized builds are on the roadmap.
+> Release builds are **Developer ID signed and notarized by Apple** — download, open, done.
 
 ## Why This Approach
 

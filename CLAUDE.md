@@ -55,9 +55,9 @@ regenerate with `scripts/demo/make_demo_data.py` + `shoot_screenshots.py`
 
 ## Releasing the app
 
-Push a `v*` tag → `.github/workflows/release.yml` builds the universal dmg
-and uploads it to the GitHub Release (idempotent `--clobber`). Builds are
-**ad-hoc signed** — there is no Developer ID certificate (keychain only has an
-Apple Development cert); release notes and README must keep the Gatekeeper
-"Open Anyway" / `xattr -cr` instructions until signing + notarization lands.
-Bump `desktop/src-tauri/tauri.conf.json` `version` before tagging.
+Push a `v*` tag → `.github/workflows/release.yml` builds the universal dmg,
+**Developer ID signs + notarizes** it (repo Actions secrets `APPLE_*`; the
+local signing kit and its docs live in `~/creds/apple/` — see the README
+there), and uploads to the GitHub Release (idempotent `--clobber`). Bump
+`desktop/src-tauri/tauri.conf.json` `version` before tagging. Local signed
+build: same `APPLE_*` env vars on `npm run tauri build`.

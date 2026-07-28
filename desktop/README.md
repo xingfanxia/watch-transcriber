@@ -13,8 +13,8 @@ npm run tauri build          # bundle EchoWall.app / .dmg
 ```
 
 Prebuilt universal dmg on [GitHub Releases](https://github.com/xingfanxia/watch-transcriber/releases)
-(`v*` tags auto-build via `.github/workflows/release.yml`; ad-hoc signed — see
-the repo README's Gatekeeper note).
+(`v*` tags auto-build via `.github/workflows/release.yml`; Developer ID
+signed + notarized).
 
 `WATCH_TRANSCRIBER_DATA` overrides the archive location; otherwise the app
 walks up from its executable to find the enclosing clone's `data/`. On a

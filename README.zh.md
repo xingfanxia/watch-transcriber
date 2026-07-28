@@ -39,7 +39,7 @@ npm run tauri build    # 打包独立的 EchoWall.app / .dmg
 
 不想自己构建：直接从 [**GitHub Releases**](https://github.com/xingfanxia/watch-transcriber/releases) 下载最新的 `EchoWall_*_universal.dmg`（Apple Silicon + Intel 通用）。每次打 `v*` tag，CI 自动构建发版（`.github/workflows/release.yml`）。
 
-> **Gatekeeper 提示**：release 构建是 ad-hoc 签名、未公证（还没有 Developer ID 证书）。首次打开 macOS 会拒绝——去 系统设置 → 隐私与安全性 → 「仍要打开」，或者用 `xattr -cr /Applications/EchoWall.app` 清掉隔离标记。签名 + 公证版在路线图上。
+> Release 构建带 **Developer ID 签名并通过 Apple 公证** —— 下载即开，无任何 Gatekeeper 阻拦。
 
 ## 为什么选这个方案
 
