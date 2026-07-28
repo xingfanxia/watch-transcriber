@@ -82,6 +82,8 @@
   .row:hover .facepile .avatar, .row.on .facepile .avatar { margin-left: 2px; }
   .row:hover .facepile .avatar:first-child, .row.on .facepile .avatar:first-child { margin-left: 0; }
   .cat-l { display: inline-flex; align-items: center; gap: 8px; }
+  .cat .avatar { cursor: pointer; position: relative; }
+  .color-in { position: absolute; inset: 0; opacity: 0; pointer-events: none; width: 100%; height: 100%; }
   .cat.spk { padding-top: 5px; padding-bottom: 5px; }
   .row .dur { font-size: 11.5px; flex: none; }
   .row .dur.short { color: var(--faint); }
@@ -268,6 +270,8 @@ const spkHue = name => {
   return _hueMap.get(name);
 };
 const spkColor = (name, alpha) => {
+  const custom = (DATA.speaker_colors || {})[name];
+  if (custom) return alpha ? `color-mix(in srgb, ${custom} ${alpha * 100}%, transparent)` : custom;
   const light = matchMedia("(prefers-color-scheme: light)").matches;
   return `hsl(${spkHue(name)} 60% ${light ? 38 : 68}%${alpha ? " / " + alpha : ""})`;
 };
@@ -324,7 +328,30 @@ function renderSide() {
     const mkSpk = (label, key, count) => {
       const b = el("button", "cat spk" + ((state.spk ?? null) === key ? " on" : ""));
       const left = el("span", "cat-l");
-      left.append(avatarEl(label), el("span", null, label));
+      const av = avatarEl(label);
+      if (CAN_EDIT) {
+        // Clicking the circle (not the row) opens a native color picker; the
+        // custom color persists to data/speakers.json via the loopback API.
+        av.title = `${label} — 点击改颜色`;
+        const pick = el("input");
+        pick.type = "color";
+        pick.className = "color-in";
+        pick.oninput = () => {
+          (DATA.speaker_colors = DATA.speaker_colors || {})[label] = pick.value;
+          renderSide(); renderList();
+          if (state.sel) select(state.sel);
+        };
+        pick.onchange = () => {
+          fetch("/api/speaker-colors", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: label, color: pick.value }),
+          }).catch(() => {});
+        };
+        av.onclick = ev => { ev.stopPropagation(); pick.click(); };
+        av.append(pick);
+      }
+      left.append(av, el("span", null, label));
       b.append(left, el("span", "n", String(count)));
       b.onclick = () => { state.spk = state.spk === key ? null : key; renderSide(); renderList(); };
       cats.append(b);

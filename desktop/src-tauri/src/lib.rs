@@ -166,6 +166,54 @@ async fn save_attachment(
     Ok(Json(serde_json::json!({ "ok": true, "rel": rel })))
 }
 
+/// Persist a custom speaker color to data/speakers.json (source for the
+/// viewer's spkColor override), then rebuild the viewer + push the repo.
+async fn save_speaker_color(
+    State(dir): State<PathBuf>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let err500 = |e: String| (StatusCode::INTERNAL_SERVER_ERROR, e);
+    let bad = |m: &str| (StatusCode::BAD_REQUEST, m.to_string());
+    let name = body.get("name").and_then(Value::as_str).ok_or(bad("missing name"))?;
+    let color = body.get("color").and_then(Value::as_str).ok_or(bad("missing color"))?;
+    if name.is_empty() || name.len() > 60 || name.contains('\n') {
+        return Err(bad("bad name"));
+    }
+    let hex_ok = color.len() == 7
+        && color.starts_with('#')
+        && color[1..].chars().all(|c| c.is_ascii_hexdigit());
+    if !hex_ok {
+        return Err(bad("color must be #rrggbb"));
+    }
+
+    let path = dir.join("speakers.json");
+    let mut colors: Value = match std::fs::read_to_string(&path) {
+        Ok(raw) => serde_json::from_str(&raw).map_err(|e| err500(e.to_string()))?,
+        Err(_) => serde_json::json!({}),
+    };
+    colors
+        .as_object_mut()
+        .ok_or_else(|| err500("speakers.json is not an object".into()))?
+        .insert(name.to_string(), Value::String(color.to_string()));
+    let tmp = path.with_extension("json.tmp");
+    let pretty = serde_json::to_string_pretty(&colors).map_err(|e| err500(e.to_string()))?;
+    std::fs::write(&tmp, pretty + "\n").map_err(|e| err500(e.to_string()))?;
+    std::fs::rename(&tmp, &path).map_err(|e| err500(e.to_string()))?;
+
+    let repo = dir.clone();
+    let msg = format!("speakers: color {name} -> {color}");
+    std::thread::spawn(move || {
+        if let Some(root) = repo.parent() {
+            let _ = std::process::Command::new("python3")
+                .args(["-m", "deliveries.viewer"])
+                .current_dir(root)
+                .output();
+        }
+        git_commit_push(&repo, &msg);
+    });
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
 /// Delete a recording — delegates to scripts/ops/delete_recording.py, the
 /// single audited deletion path (files + manifest + views + rollups + R2 +
 /// git commit/push). Runs synchronously so the UI gets a definitive answer.
@@ -258,6 +306,7 @@ pub fn run() {
                         .route("/api/speakers", post(save_speakers))
                         .route("/api/attachments", post(save_attachment))
                         .route("/api/delete", post(delete_recording))
+                        .route("/api/speaker-colors", post(save_speaker_color))
                         .fallback_service(ServeDir::new(dir.clone()))
                         .with_state(dir);
                     axum::serve(listener, router).await.expect("archive server");

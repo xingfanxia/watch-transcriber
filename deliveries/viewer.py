@@ -111,10 +111,15 @@ def build() -> Path:
             **parsed,
         })
 
+    colors_file = root / "speakers.json"
+    speaker_colors = (
+        json.loads(colors_file.read_text(encoding="utf-8")) if colors_file.exists() else {}
+    )
     years = sorted({e["date"][:4] for e in entries})
     payload = {
         "span": f"{years[0]}–{years[-1]}" if years else "",
         "categories": manifest_mod.CATEGORIES,
+        "speaker_colors": speaker_colors,
         "entries": entries,
     }
     html = _TEMPLATE.read_text(encoding="utf-8").replace(
