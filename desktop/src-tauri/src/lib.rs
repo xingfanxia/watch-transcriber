@@ -166,6 +166,45 @@ async fn save_attachment(
     Ok(Json(serde_json::json!({ "ok": true, "rel": rel })))
 }
 
+/// Delete a recording — delegates to scripts/ops/delete_recording.py, the
+/// single audited deletion path (files + manifest + views + rollups + R2 +
+/// git commit/push). Runs synchronously so the UI gets a definitive answer.
+async fn delete_recording(
+    State(dir): State<PathBuf>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let key = body
+        .get("key")
+        .and_then(Value::as_str)
+        .ok_or((StatusCode::BAD_REQUEST, "missing key".to_string()))?
+        .to_string();
+    let root = dir
+        .parent()
+        .ok_or((StatusCode::INTERNAL_SERVER_ERROR, "no repo root".to_string()))?
+        .to_path_buf();
+    let out = tokio::task::spawn_blocking(move || {
+        std::process::Command::new("python3")
+            .args(["scripts/ops/delete_recording.py", &key])
+            .current_dir(root)
+            .output()
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let parsed: Value = serde_json::from_str(stdout.trim().lines().last().unwrap_or("{}"))
+        .unwrap_or(serde_json::json!({"ok": false, "error": "unparseable script output"}));
+    if !out.status.success() || parsed.get("ok") != Some(&Value::Bool(true)) {
+        let detail = parsed
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or(&String::from_utf8_lossy(&out.stderr))
+            .to_string();
+        return Err((StatusCode::INTERNAL_SERVER_ERROR, detail));
+    }
+    Ok(Json(parsed))
+}
+
 /// Best-effort persistence to the private notes repo; offline is fine — the
 /// next pipeline archive_git push carries the commit along.
 fn git_commit_push(repo: &Path, msg: &str) {
@@ -218,6 +257,7 @@ pub fn run() {
                         }))
                         .route("/api/speakers", post(save_speakers))
                         .route("/api/attachments", post(save_attachment))
+                        .route("/api/delete", post(delete_recording))
                         .fallback_service(ServeDir::new(dir.clone()))
                         .with_state(dir);
                     axum::serve(listener, router).await.expect("archive server");

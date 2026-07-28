@@ -182,7 +182,8 @@ DELIVERY_TARGETS=file,apple_notes
 `desktop/` 是薄壳:环回 axum 服务器伺服 `data/`(带 HTTP Range,音频可拖进度),webview 加载同一个生成的 `index.html` —— 不存在第二份 viewer 实现。`cd desktop && npm run tauri dev` 运行,`npm run tauri build` 打包;`WATCH_TRANSCRIBER_DATA` 可覆盖档案位置。
 
 - **说话人标注**(仅 app 内可编辑,走环回 API):详情页点说话人芯片给 `SPEAKER_N` 命名,可一键批量应用到当前筛选的全部录音;标注存进 `manifest.json` 的 `speakers` 字段,reprocess 不会丢,自动 commit+push 到私有笔记仓库,并驱动侧栏「说话人」筛选和转写显示。标注同时**回写进笔记文件的转写标签**(`scripts/ops/apply_speakers.py`,借 manifest 的 `speakers_applied` 可逆改名/清除)。pipeline 重建档案后页面自动刷新。
-- **Markdown 附注**:详情页「附注」区粘贴或选择 `.md`/`.txt` 文件 —— 存为 `data/<日期>/<HHMMSS>-attachments/*.md`,记录进 manifest,app 内渲染(vendor 的 `marked`),与其余数据一样推送私有仓库。
+- **Markdown 附注**:详情页「附注」tab 粘贴或选择 `.md`/`.txt` 文件 —— 存为 `data/<日期>/<HHMMSS>-attachments/*.md`,记录进 manifest,app 内渲染(vendor 的 `marked`),与其余数据一样推送私有仓库。详情页分 摘要/附注/转写 三个 tab(快捷键 1/2/3)。
+- **删除**:详情页两步确认的「删除」按钮(或 `scripts/ops/delete_recording.py`)—— 移除笔记、音频拷贝、附注、manifest 条目、by-topic 链接、R2 备份对象并刷新当日汇总,然后自动 commit+push。Voice Memos 原件和 Apple Notes/飞书分身有意不动;私有仓库 git 历史里随时可恢复。
 - **GPT 对话导入**:`scripts/ops/import_gpt_thread.py <export.json>` 扫描 ChatGPT 导出(含全部分支),把上传过的转写文件映射回录音(兼容三代历史文件名),给每条录音挂上对应的 GPT 分析附注,并从分析中提取「SPEAKER_N 是谁」自动打标(绝不覆盖手工标注)。幂等可重跑。
 - **新机器**:clone 本仓库直接开 app —— 档案缺失时显示引导页,跑一次 `python3 scripts/ops/restore_archive.py`(克隆私有笔记仓库、从 R2 拉回全部音频、seed 上传账本、重建 viewer)后自动进入。
 

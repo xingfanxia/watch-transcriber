@@ -8,6 +8,7 @@ new/changed notes + manifest.json. No-op when there is nothing to commit or
 when data/ isn't a git repo.
 """
 
+import re
 import subprocess
 
 from . import archive_root
@@ -48,7 +49,11 @@ def deliver(note: dict) -> bool:
     if not git("status", "--porcelain").stdout.strip():
         print("[delivery:archive_git] nothing to commit")
         return True
-    r = git("commit", "-m", f"add: {note['title']}")
+    # Ops callers (delete/import/speakers scripts) pass an action-shaped title
+    # like "delete: …" — use it verbatim; plain note titles get the add: prefix.
+    title = note["title"]
+    msg = title if re.match(r"^[a-z][a-z-]*: ", title) else f"add: {title}"
+    r = git("commit", "-m", msg)
     if r.returncode != 0:
         print(f"[delivery:archive_git] commit failed: {r.stderr.strip()[:200]}")
         return False

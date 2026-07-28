@@ -236,6 +236,34 @@ def test_apply_speakers_rewrites_and_reverts(archive, tmp_path):
     assert "speakers_applied" not in manifest.load()[key]
 
 
+def test_delete_recording_removes_everything(archive, tmp_path):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts" / "ops"))
+    from delete_recording import delete_recording
+
+    src = tmp_path / "20260726 013421-44BB9B24.m4a"
+    src.write_bytes(b"x" * 64)
+    note = _note(tmp_path, audio=src)
+    day = archive / "2026-07-26"
+    day.mkdir()
+    (day / "013421-银发大基建中控平台合作.md").write_text("# t", encoding="utf-8")
+    audio_archive.deliver(note)
+    manifest.deliver(note)
+    att = day / "013421-attachments"
+    att.mkdir()
+    (att / "x.md").write_text("hi", encoding="utf-8")
+    m = manifest.load()
+    m["2026-07-26 013421"]["attachments"] = ["2026-07-26/013421-attachments/x.md"]
+    manifest.save(m)
+
+    r = delete_recording("2026-07-26 013421", dry_run=True, keep_r2=True)
+    assert r["ok"] and len(r["would_delete"]) >= 3
+    r = delete_recording("2026-07-26 013421", keep_r2=True)
+    assert r["ok"]
+    assert not day.exists()  # last recording of the day -> dir retired
+    assert "2026-07-26 013421" not in manifest.load()
+    assert delete_recording("2026-07-26 013421", keep_r2=True)["ok"] is False
+
+
 def test_manifest_missing_audio_is_null(archive, tmp_path):
     note = _note(tmp_path)  # audio_path doesn't exist, no copy made
     day = archive / "2026-07-26"

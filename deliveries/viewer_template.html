@@ -84,6 +84,11 @@
   .detail-pad { padding: 26px 30px 60px; }
   .placeholder { height: 100%; display: grid; place-items: center; color: var(--faint); font-size: 13px; }
   .d-cat { font-family: var(--mono); font-size: 11px; color: var(--amber); letter-spacing: .12em; }
+  .d-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+  .del-btn { font-size: 11.5px; color: var(--faint); border: 1px solid var(--line);
+             border-radius: 8px; padding: 3px 10px; flex: none; }
+  .del-btn:hover { color: #e5534b; border-color: #e5534b; }
+  .del-btn.armed { color: #fff; background: #c93c34; border-color: #c93c34; }
   .d-title { font-family: var(--serif); font-size: 24px; font-weight: 900; line-height: 1.35; margin: 6px 0 4px; }
   .d-meta { font-family: var(--mono); font-size: 11px; color: var(--faint); margin-bottom: 18px; }
   .player { display: flex; align-items: center; gap: 12px; background: var(--panel);
@@ -119,6 +124,12 @@
              padding: 6px 12px; font-size: 12px; }
   .spk-btn:hover { border-color: var(--amber); color: var(--amber); }
   .spk-hint { flex-basis: 100%; font-size: 11px; color: var(--faint); }
+  .tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); margin: 18px 0 16px; }
+  .tab { padding: 8px 16px; font-size: 13px; color: var(--dim); border-bottom: 2px solid transparent;
+         margin-bottom: -1px; }
+  .tab:hover { color: var(--ink); }
+  .tab.on { color: var(--ink); border-bottom-color: var(--amber); }
+  .tab-body { min-height: 120px; }
   .att { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
          margin: 10px 0; overflow: hidden; }
   .att summary { cursor: pointer; padding: 10px 16px; font-size: 13px; color: var(--dim); }
@@ -205,7 +216,7 @@ const fmtDur = s => {
   return h ? `${h}:${String(m).padStart(2,"0")}:${String(x).padStart(2,"0")}` : `${m}:${String(x).padStart(2,"0")}`;
 };
 
-let state = { cat: null, spk: null, q: "", sel: null };
+let state = { cat: null, spk: null, q: "", sel: null, tab: "summary" };
 /* Editing needs the desktop app's loopback API; file:// stays read-only. */
 const CAN_EDIT = location.protocol.startsWith("http");
 
@@ -303,6 +314,9 @@ const audio = $("#audio");
 let playing = null;
 function select(key) {
   state.sel = key;
+  // Switching to a different recording stops the previous one — otherwise
+  // the old audio keeps playing with no visible control to stop it.
+  if (playing && playing !== key && !audio.paused) audio.pause();
   const e = DATA.entries.find(x => x.key === key);
   renderList();
   const row = $(`.row[data-key="${CSS.escape(key)}"]`);
@@ -310,7 +324,35 @@ function select(key) {
   const d = $("#detail"); d.textContent = "";
   const pad = el("div", "detail-pad");
 
-  pad.append(el("div", "d-cat", e.category), el("h2", "d-title", e.ai_title),
+  const head = el("div", "d-head");
+  head.append(el("div", "d-cat", e.category));
+  if (CAN_EDIT) {
+    const del = el("button", "del-btn", "删除");
+    del.onclick = () => {
+      if (!del.classList.contains("armed")) {
+        del.classList.add("armed");
+        del.textContent = "确认删除?(笔记+音频+附注)";
+        setTimeout(() => { del.classList.remove("armed"); del.textContent = "删除"; }, 4000);
+        return;
+      }
+      del.disabled = true; del.textContent = "删除中…";
+      fetch("/api/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key: e.key }),
+      }).then(r => { if (!r.ok) return r.text().then(t => { throw new Error(t); }); })
+        .then(() => {
+          DATA.entries = DATA.entries.filter(x => x.key !== e.key);
+          state.sel = null;
+          $("#detail").textContent = "";
+          $("#detail").append(el("div", "placeholder", "已删除"));
+          renderSide(); renderList();
+        })
+        .catch(err => { del.disabled = false; del.textContent = "删除失败: " + err.message.slice(0, 60); });
+    };
+    head.append(del);
+  }
+  pad.append(head, el("h2", "d-title", e.ai_title),
              el("div", "d-meta", `${e.date} ${e.time} · ${e.original || "原始文件已删除"}${e.duration ? " · " + fmtDur(e.duration) : ""}`));
 
   const slots = slotsOf(e);
@@ -331,42 +373,70 @@ function select(key) {
 
   if (e.audio) pad.append(buildPlayer(e));
 
-  if (e.summary_zh || e.summary_en) {
-    pad.append(el("div", "sec", "摘要"));
-    if (e.summary_zh) pad.append(el("p", "d-sum", e.summary_zh));
-    if (e.summary_en) pad.append(el("p", "d-sum", e.summary_en));
+  const tabs = el("div", "tabs");
+  const body = el("div", "tab-body");
+  const defs = [
+    ["summary", "摘要"],
+    ["attach", `附注${(e.attachments || []).length ? " " + e.attachments.length : ""}`],
+    ["transcript", "转写"],
+  ];
+  const renderTab = () => {
+    body.textContent = "";
+    tabs.querySelectorAll(".tab").forEach(t =>
+      t.classList.toggle("on", t.dataset.tab === state.tab));
+    if (state.tab === "summary") buildSummaryTab(e, body);
+    else if (state.tab === "attach") buildAttachTab(e, body);
+    else buildTranscriptTab(e, body);
+  };
+  for (const [id, label] of defs) {
+    const t = el("button", "tab", label);
+    t.dataset.tab = id;
+    t.onclick = () => { state.tab = id; renderTab(); };
+    tabs.append(t);
   }
-  if (e.key_points && e.key_points.length) {
-    pad.append(el("div", "sec", "要点"));
-    const ul = el("ul", "kps");
-    e.key_points.forEach(k => ul.append(el("li", null, k)));
-    pad.append(ul);
-  }
-  if (e.todos && e.todos.length) {
-    pad.append(el("div", "sec", "待办"));
-    const ul = el("ul", "todos");
-    e.todos.forEach(k => ul.append(el("li", null, k)));
-    pad.append(ul);
-  }
-  pad.append(el("div", "sec", "附注"));
-  for (const att of e.attachments || []) {
-    const box = el("details", "att");
-    box.append(el("summary", null, att.name));
-    const body = el("div", "md-body");
-    body.innerHTML = window.marked ? marked.parse(att.content) : "";
-    if (!window.marked) body.textContent = att.content;
-    box.append(body);
-    pad.append(box);
-  }
-  if (!(e.attachments || []).length) pad.append(el("p", "att-empty", "暂无附注"));
-  if (CAN_EDIT) pad.append(buildAttachEditor(e));
-
-  if (e.transcript) {
-    pad.append(el("div", "sec", "转写"));
-    pad.append(buildTranscript(e));
-  }
+  pad.append(tabs, body);
+  renderTab();
   d.append(pad);
   d.scrollTop = 0;
+}
+
+function buildSummaryTab(e, body) {
+  if (e.summary_zh) body.append(el("p", "d-sum", e.summary_zh));
+  if (e.summary_en) body.append(el("p", "d-sum", e.summary_en));
+  if (e.key_points && e.key_points.length) {
+    body.append(el("div", "sec", "要点"));
+    const ul = el("ul", "kps");
+    e.key_points.forEach(k => ul.append(el("li", null, k)));
+    body.append(ul);
+  }
+  if (e.todos && e.todos.length) {
+    body.append(el("div", "sec", "待办"));
+    const ul = el("ul", "todos");
+    e.todos.forEach(k => ul.append(el("li", null, k)));
+    body.append(ul);
+  }
+  if (!e.summary_zh && !e.summary_en && !(e.key_points || []).length && !(e.todos || []).length)
+    body.append(el("p", "att-empty", "这条录音没有摘要"));
+}
+
+function buildAttachTab(e, body) {
+  for (const att of e.attachments || []) {
+    const box = el("details", "att");
+    if ((e.attachments || []).length === 1) box.open = true;
+    box.append(el("summary", null, att.name));
+    const md = el("div", "md-body");
+    md.innerHTML = window.marked ? marked.parse(att.content) : "";
+    if (!window.marked) md.textContent = att.content;
+    box.append(md);
+    body.append(box);
+  }
+  if (!(e.attachments || []).length) body.append(el("p", "att-empty", "暂无附注"));
+  if (CAN_EDIT) body.append(buildAttachEditor(e));
+}
+
+function buildTranscriptTab(e, body) {
+  if (e.transcript) body.append(buildTranscript(e));
+  else body.append(el("p", "att-empty", "这条录音没有转写"));
 }
 
 function buildAttachEditor(e) {
@@ -429,6 +499,13 @@ function buildPlayer(e) {
     time.textContent = fmtDur(audio.currentTime) + " / " + fmtDur(audio.duration);
   };
   box.seekTo = sec => { load(); audio.currentTime = sec; audio.play(); };
+  // Re-opening the entry that's already loaded: restore progress + button
+  // state instead of showing a blank 0:00 player.
+  if (playing === e.key && audio.duration) {
+    fill.style.width = audio.currentTime / audio.duration * 100 + "%";
+    time.textContent = fmtDur(audio.currentTime) + " / " + fmtDur(audio.duration);
+    if (!audio.paused) { btn.textContent = "⏸"; btn.setAttribute("aria-label", "暂停"); }
+  }
   return box;
 }
 
@@ -521,6 +598,11 @@ document.addEventListener("keydown", ev => {
   if (ev.target.tagName === "INPUT") { if (ev.key === "Escape") { ev.target.value = ""; state.q = ""; renderList(); ev.target.blur(); } return; }
   if (ev.key === "/") { ev.preventDefault(); $("#q").focus(); return; }
   if (ev.key === " " && state.sel) { ev.preventDefault(); const p = $(".play-btn"); if (p) p.click(); return; }
+  if ("123".includes(ev.key) && state.sel) {
+    state.tab = ["summary", "attach", "transcript"][+ev.key - 1];
+    select(state.sel);
+    return;
+  }
   if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
     ev.preventDefault();
     const items = visible(); if (!items.length) return;
