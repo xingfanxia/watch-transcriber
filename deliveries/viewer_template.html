@@ -299,6 +299,7 @@ function renderList() {
     if (e.audio) top.append(el("span", "dur", fmtDur(e.duration)));
     else top.append(el("span", "noaudio", "无音频"));
     const dial = el("div", "dial"), tick = el("i");
+    dial.title = `24小时刻度:${e.time} 开始` + (e.duration ? `,时长 ${fmtDur(e.duration)}(刻度位置=一天中的时刻,长度∝时长)` : "");
     const startPct = (e.hour_frac / 24) * 100;
     const widPct = Math.min(((e.duration || 60) / 86400) * 100 * 6, 100 - startPct); /* ×6 so a 1h note is visible */
     tick.style.left = startPct + "%"; tick.style.width = Math.max(widPct, .35) + "%";
