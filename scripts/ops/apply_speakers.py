@@ -56,6 +56,13 @@ def apply_keys(keys: list[str] | None = None, rebuild_viewer: bool = True) -> in
             new = desired.get(slot) or slot
             if old == new:
                 continue
+            # Shared-display guard: if another slot still maps to this display
+            # name, rewriting by name would clobber that slot's lines too
+            # (seen with a phantom slot from an old-export labeling scheme).
+            if any(s != slot and desired.get(s) == old for s in desired):
+                print(f"  WARN {key}: skip rewriting {slot} — display {old!r} "
+                      f"still owned by another slot")
+                continue
             text = re.sub(
                 rf"^(\[[^\]]+\])\s*{re.escape(old)}\s*[:：]",
                 rf"\1 {new}:",
@@ -66,8 +73,15 @@ def apply_keys(keys: list[str] | None = None, rebuild_viewer: bool = True) -> in
         tmp = md_path.with_suffix(".md.tmp")
         tmp.write_text(text, encoding="utf-8")
         os.replace(tmp, md_path)
-        if desired:
-            entry["speakers_applied"] = dict(desired)
+        # Record only what the file actually carries — a tag whose display
+        # never occurs in the transcript (phantom slot) must not be recorded,
+        # or a later clear would try to un-rewrite lines it never touched.
+        new_applied = {
+            slot: name for slot, name in desired.items()
+            if re.search(rf"^\[[^\]]+\]\s*{re.escape(name)}\s*[:：]", text, re.M)
+        }
+        if new_applied:
+            entry["speakers_applied"] = new_applied
         else:
             entry.pop("speakers_applied", None)
         changed += 1
