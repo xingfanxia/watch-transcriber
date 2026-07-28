@@ -1,4 +1,4 @@
-# AX语音Vault (desktop shell)
+# 回音壁 EchoWall (desktop shell)
 
 Thin Tauri v2 shell over the archive the pipeline generates. A loopback axum
 server serves `../data/` (HTTP Range → audio seeking) plus the manager APIs
@@ -9,7 +9,7 @@ there is no second viewer implementation here.
 ```bash
 npm install
 npm run tauri dev            # run against ../data
-npm run tauri build          # bundle AX语音Vault.app / .dmg
+npm run tauri build          # bundle EchoWall.app / .dmg
 ```
 
 Prebuilt universal dmg on [GitHub Releases](https://github.com/xingfanxia/watch-transcriber/releases)
@@ -19,4 +19,4 @@ the repo README's Gatekeeper note).
 `WATCH_TRANSCRIBER_DATA` overrides the archive location; otherwise the app
 walks up from its executable to find the enclosing clone's `data/`. On a
 machine with no archive yet it shows a bootstrap page — see the repo README's
-"AX语音Vault — the desktop client" section for the restore/first-run flows.
+"EchoWall — the desktop client" section for the restore/first-run flows.

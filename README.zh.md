@@ -2,18 +2,26 @@
 
 [English](README.md)
 
-Apple Watch 语音转文字流水线（妙记转写约 2 元/小时）。手腕上录音，自动生成结构化笔记——再用自带的桌面 App **AX语音Vault** 浏览、播放、管理整个档案。
+Apple Watch 语音转文字流水线（妙记转写约 2 元/小时）。手腕上录音，自动生成结构化笔记——再用自带的桌面 App **回音壁**(EchoWall)浏览、播放、管理整个档案。
 
 ```
 Apple Watch (语音备忘录) → iCloud 同步 → Mac 检测新 .m4a
   → 妙记（火山 Lark Minutes）语音识别 — 服务端说话人分离（Gemini/OpenAI 兜底）
     → 可插拔投递层 (Apple Notes、飞书、Obsidian、自定义)
-      → AX语音Vault 桌面 App（浏览 · 播放 · 说话人标注 · 管理）
+      → 回音壁 EchoWall 桌面 App（浏览 · 播放 · 说话人标注 · 管理）
 ```
 
-## AX语音Vault —— 桌面客户端
+## 回音壁 EchoWall —— 桌面客户端
 
 流水线的产出不是一堆再也不会打开的 markdown —— 仓库自带一个桌面 App（`desktop/`，Tauri v2），把本地档案变成可浏览、可播放、可管理的语音金库：
+
+| 摘要 —— 双语摘要、要点、待办 | 转写 —— 说话人彩色标注、点时间戳跳播 |
+|---|---|
+| ![概览:摘要 tab,双语摘要与说话人芯片](docs/screenshots/01-overview.png) | ![转写 tab,说话人配色与可点击时间戳](docs/screenshots/02-transcript.png) |
+| **附注 —— Markdown 应用内渲染** | **说话人 —— 快速标注 + 批量应用** |
+| ![附注 tab,渲染含表格与引用的 markdown 分析](docs/screenshots/03-attachments.png) | ![说话人选择器,快选与批量应用](docs/screenshots/04-speaker-tagging.png) |
+
+*截图内容均为虚构演示数据。*
 
 - **暗色档案 UI** —— AI 标题、双语摘要、要点、完整分说话人转写；搜索、话题 + 说话人筛选、按天汇总；详情页分 摘要/附注/转写 三个 tab（快捷键 1/2/3）；点转写里任意时间戳，音频直接跳到那一刻。pipeline 投递新录音后页面自动同步。
 - **说话人标注** —— 点芯片给 `SPEAKER_N` 命名，可批量应用到当前筛选，支持自选人物颜色；每行显示层叠的头像堆。标注存进 `manifest.json` 的 `speakers` 字段，reprocess 不丢，自动 commit+push 到私有笔记仓库，并回写进笔记文件的转写标签（`scripts/ops/apply_speakers.py`，借 `speakers_applied` 可逆）。
@@ -26,12 +34,12 @@ Apple Watch (语音备忘录) → iCloud 同步 → Mac 检测新 .m4a
 cd desktop
 npm install
 npm run tauri dev      # 对 ../data 运行
-npm run tauri build    # 打包独立的 AX语音Vault.app / .dmg
+npm run tauri build    # 打包独立的 EchoWall.app / .dmg
 ```
 
-不想自己构建：直接从 [**GitHub Releases**](https://github.com/xingfanxia/watch-transcriber/releases) 下载最新的 `AX-Voice-Vault_*_universal.dmg`（Apple Silicon + Intel 通用）。每次打 `v*` tag，CI 自动构建发版（`.github/workflows/release.yml`）。
+不想自己构建：直接从 [**GitHub Releases**](https://github.com/xingfanxia/watch-transcriber/releases) 下载最新的 `EchoWall_*_universal.dmg`（Apple Silicon + Intel 通用）。每次打 `v*` tag，CI 自动构建发版（`.github/workflows/release.yml`）。
 
-> **Gatekeeper 提示**：release 构建是 ad-hoc 签名、未公证（还没有 Developer ID 证书）。首次打开 macOS 会拒绝——去 系统设置 → 隐私与安全性 → 「仍要打开」，或者用 `xattr -cr /Applications/AX语音Vault.app` 清掉隔离标记。签名 + 公证版在路线图上。
+> **Gatekeeper 提示**：release 构建是 ad-hoc 签名、未公证（还没有 Developer ID 证书）。首次打开 macOS 会拒绝——去 系统设置 → 隐私与安全性 → 「仍要打开」，或者用 `xattr -cr /Applications/EchoWall.app` 清掉隔离标记。签名 + 公证版在路线图上。
 
 ## 为什么选这个方案
 
@@ -293,7 +301,7 @@ watch-transcriber/
 │   ├── feishu_notify.py       # 飞书 bot 私信（附文档链接）
 │   ├── obsidian_git.py        # GitHub 提交到 Obsidian 仓库
 │   └── agent.py               # claude -p 委托（飞书、Slack 等）
-├── desktop/                   # AX语音Vault —— Tauri 壳（axum 环回服务 + 管理 API）
+├── desktop/                   # 回音壁 EchoWall —— Tauri 壳（axum 环回服务 + 管理 API）
 ├── scripts/backfill/          # 幂等回填:音频拷贝 / manifest+分类 / R2 同步
 ├── scripts/ops/               # apply_speakers / delete_recording / import_gpt_thread / restore_archive
 ├── tests/                     # pytest 测试套件（命名、投递、manifest、viewer、删除）

@@ -1,6 +1,6 @@
 # watch-transcriber — agent notes
 
-Voice Memos → 妙记 STT → pluggable deliveries → local archive + AX语音Vault
+Voice Memos → 妙记 STT → pluggable deliveries → local archive + 回音壁 EchoWall
 desktop app. Feature docs live in `README.md` / `README.zh.md` (bilingual —
 **edit both**); this file is only what an agent needs before touching code.
 

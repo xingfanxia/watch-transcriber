@@ -1,9 +1,9 @@
 name: release
 
-# Tag `v*` → build the universal macOS bundle of AX语音Vault and attach it to a
-# GitHub Release. Builds are ad-hoc signed (no Developer ID cert in CI) — the
-# release notes must carry the Gatekeeper bypass instructions; see README
-# "AX语音Vault — the desktop client".
+# Tag `v*` → build the universal macOS bundle of 回音壁 EchoWall and attach it
+# to a GitHub Release. Builds are ad-hoc signed (no Developer ID cert in CI) —
+# the release notes must carry the Gatekeeper bypass instructions; see README
+# "EchoWall — the desktop client".
 
 on:
   push:
@@ -39,14 +39,12 @@ jobs:
         working-directory: desktop
         run: npm run tauri build -- --target universal-apple-darwin
 
-      - name: Rename artifact (ASCII, curl-friendly)
+      - name: Locate artifact
         id: artifact
         run: |
           DMG=$(ls desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg)
-          VERSION="${GITHUB_REF_NAME#v}"
-          OUT="AX-Voice-Vault_${VERSION:-dev}_universal.dmg"
-          cp "$DMG" "$OUT"
-          echo "path=$OUT" >> "$GITHUB_OUTPUT"
+          echo "path=$DMG" >> "$GITHUB_OUTPUT"
+          echo "name=$(basename "$DMG")" >> "$GITHUB_OUTPUT"
 
       - name: Upload to release (tag builds only)
         if: startsWith(github.ref, 'refs/tags/')
@@ -55,11 +53,11 @@ jobs:
         run: |
           gh release upload "$GITHUB_REF_NAME" "${{ steps.artifact.outputs.path }}" --clobber ||
           gh release create "$GITHUB_REF_NAME" "${{ steps.artifact.outputs.path }}" \
-            --title "AX语音Vault $GITHUB_REF_NAME" --generate-notes
+            --title "回音壁 EchoWall $GITHUB_REF_NAME" --generate-notes
 
       - name: Upload workflow artifact (dispatch builds)
         if: "!startsWith(github.ref, 'refs/tags/')"
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.artifact.outputs.path }}
+          name: ${{ steps.artifact.outputs.name }}
           path: ${{ steps.artifact.outputs.path }}

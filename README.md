@@ -2,18 +2,26 @@
 
 [中文版](README.zh.md)
 
-Apple Watch voice transcription pipeline (~¥2/hour of audio via 妙记). Record on your wrist, get structured notes automatically — then browse, play, and manage the whole archive in **AX语音Vault**, the bundled desktop app.
+Apple Watch voice transcription pipeline (~¥2/hour of audio via 妙记). Record on your wrist, get structured notes automatically — then browse, play, and manage the whole archive in **EchoWall** (回音壁), the bundled desktop app.
 
 ```
 Apple Watch (Voice Memos) → iCloud Sync → Mac detects new .m4a
   → 妙记 (Volcano Lark Minutes) STT — server-side diarization (Gemini/OpenAI fallback)
     → Pluggable delivery (Apple Notes, Feishu, Obsidian, custom)
-      → AX语音Vault desktop app (browse · play · tag speakers · manage)
+      → EchoWall desktop app (browse · play · tag speakers · manage)
 ```
 
-## AX语音Vault — the desktop client
+## EchoWall — the desktop client
 
 The pipeline's output isn't a pile of markdown you never open again — the repo ships a desktop app (`desktop/`, Tauri v2) that turns the local archive into a browsable, playable, manageable voice vault:
+
+| 摘要 — bilingual summary, key points, action items | 转写 — speaker-colored transcript, click-to-seek |
+|---|---|
+| ![Archive overview: summary tab with bilingual summary and speaker chips](docs/screenshots/01-overview.png) | ![Transcript tab with per-speaker colors and clickable timestamps](docs/screenshots/02-transcript.png) |
+| **附注 — markdown attachments rendered in-app** | **说话人 — quick tagging + batch apply** |
+| ![Attachments tab rendering a markdown analysis with tables and quotes](docs/screenshots/03-attachments.png) | ![Speaker picker with quick-select pills and batch apply](docs/screenshots/04-speaker-tagging.png) |
+
+*Screenshots show fabricated demo data.*
 
 - **Dark-mode archive UI** — AI titles, bilingual summaries, key points, and full diarized transcripts; search, topic + speaker filters, per-day rollups; tabbed detail pane (摘要/附注/转写, keys 1/2/3); click any transcript timestamp to seek the audio there. The page live-syncs when the pipeline delivers a new recording.
 - **Speaker tagging** — click a chip to name `SPEAKER_N`, batch-apply across the current filter, pick per-person colors; stacked facepile avatars on every row. Tags live in `manifest.json` (`speakers`), survive reprocessing, auto commit+push to the private notes repo, and are written back into the note files' transcript labels (`scripts/ops/apply_speakers.py`, reversible via `speakers_applied`).
@@ -26,12 +34,12 @@ The pipeline's output isn't a pile of markdown you never open again — the repo
 cd desktop
 npm install
 npm run tauri dev      # run against ../data
-npm run tauri build    # bundle a standalone AX语音Vault.app / .dmg
+npm run tauri build    # bundle a standalone EchoWall.app / .dmg
 ```
 
-Or skip the build: download the latest `AX-Voice-Vault_*_universal.dmg` (Apple Silicon + Intel) from [**GitHub Releases**](https://github.com/xingfanxia/watch-transcriber/releases). Releases are built by CI on every `v*` tag (`.github/workflows/release.yml`).
+Or skip the build: download the latest `EchoWall_*_universal.dmg` (Apple Silicon + Intel) from [**GitHub Releases**](https://github.com/xingfanxia/watch-transcriber/releases). Releases are built by CI on every `v*` tag (`.github/workflows/release.yml`).
 
-> **Gatekeeper note**: release builds are ad-hoc signed, not notarized (no Developer ID certificate yet). On first launch macOS will refuse to open the app — go to System Settings → Privacy & Security → "Open Anyway", or clear the quarantine flag with `xattr -cr /Applications/AX语音Vault.app`. Signed + notarized builds are on the roadmap.
+> **Gatekeeper note**: release builds are ad-hoc signed, not notarized (no Developer ID certificate yet). On first launch macOS will refuse to open the app — go to System Settings → Privacy & Security → "Open Anyway", or clear the quarantine flag with `xattr -cr /Applications/EchoWall.app`. Signed + notarized builds are on the roadmap.
 
 ## Why This Approach
 
@@ -304,7 +312,7 @@ watch-transcriber/
 │   ├── feishu_notify.py       # Feishu bot DM with link to created doc
 │   ├── obsidian_git.py        # GitHub commit to Obsidian vault
 │   └── agent.py               # claude -p delegation (Feishu, Slack, etc.)
-├── desktop/                   # AX语音Vault — Tauri shell (axum loopback server + manager APIs)
+├── desktop/                   # EchoWall 回音壁 — Tauri shell (axum loopback server + manager APIs)
 ├── scripts/backfill/          # Idempotent backfills: audio copies / manifest+categories / R2 sync
 ├── scripts/ops/               # apply_speakers / delete_recording / import_gpt_thread / restore_archive
 ├── tests/                     # pytest suite (naming, deliveries, manifest, viewer, delete)
