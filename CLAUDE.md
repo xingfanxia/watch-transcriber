@@ -48,3 +48,12 @@ venv/bin/python3 transcribe.py --doctor   # config/env sanity
 `venv/bin/python3 -m deliveries.viewer` and reload/relaunch the app
 (template-only changes don't trigger the page's auto-refresh, which watches
 `manifest.json`).
+
+## Releasing the app
+
+Push a `v*` tag → `.github/workflows/release.yml` builds the universal dmg
+and uploads it to the GitHub Release (idempotent `--clobber`). Builds are
+**ad-hoc signed** — there is no Developer ID certificate (keychain only has an
+Apple Development cert); release notes and README must keep the Gatekeeper
+"Open Anyway" / `xattr -cr` instructions until signing + notarization lands.
+Bump `desktop/src-tauri/tauri.conf.json` `version` before tagging.
