@@ -10,7 +10,7 @@
        lightness steps, one soft-blue accent for links/active only.
        --amber/--amber-deep are legacy token names, now the accent pair. */
     --bg: #1a1a1a; --panel: #232323; --panel-2: #2c2c2c; --line: #343434;
-    --ink: #ececec; --dim: #a0a0a0; --faint: #6f6f6f; --tick: #4a4a4a;
+    --ink: #ececec; --dim: #a8a8a8; --faint: #8a8a8a; --tick: #4a4a4a;
     --amber: #6cb0f5; --amber-deep: #4a90d9; --glow: rgba(108,176,245,.13);
     --serif: "PingFang SC", -apple-system, "Helvetica Neue", sans-serif;
     --sans: "PingFang SC", -apple-system, "Helvetica Neue", sans-serif;
@@ -60,10 +60,10 @@
   /* ---------- list ---------- */
   .list { overflow-y: auto; border-right: 1px solid var(--line); scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
   .day { padding: 18px 22px 8px; position: sticky; top: 0; background: var(--bg);
-         font-family: var(--mono); font-size: 11px; color: var(--faint); letter-spacing: .08em;
+         font-family: var(--mono); font-size: 11px; color: var(--dim); letter-spacing: .08em;
          display: flex; align-items: center; justify-content: space-between; gap: 14px;
          border-bottom: 1px solid var(--line); }
-  .day-sum { color: var(--faint); letter-spacing: .02em; }
+  .day-sum { color: var(--dim); letter-spacing: .02em; }
   .row { display: block; width: 100%; text-align: left; padding: 12px 22px; border-left: 2px solid transparent; }
   .row:hover { background: var(--panel); }
   .row.on { background: var(--panel-2); border-left-color: var(--amber); }
