@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>语音档案</title>
+<title>AX语音Vault</title>
 <style>
   :root {
     /* Codex-style warm graphite: neutral (not blue-tinted) dark, hierarchy by
@@ -201,7 +201,7 @@
 <div class="app">
   <nav class="side">
     <div class="brand">
-      <h1>语音档案</h1>
+      <h1>AX语音Vault</h1>
       <div class="sub" id="brandSub"></div>
     </div>
     <div class="search"><input id="q" type="search" placeholder="搜索标题或转写 (/)" aria-label="搜索"></div>
@@ -244,18 +244,40 @@ const slotsOf = e => [...new Set([
   ...((e.transcript || "").match(/SPEAKER[_ ]?\d+/g) || []),
   ...Object.keys(e.speakers || {}),
 ])];
-/* Deterministic per-name color so 妍子/AX look the same in every recording. */
+/* Per-name colors: a curated palette of well-separated hues; each name hashes
+   to a slot and collisions probe to the next free one, so speakers on screen
+   never share near-identical colors (previously AX/妍子/E姐 all landed in the
+   purple-pink band). Deterministic for a given set of names. */
+const SPK_HUES = [265, 15, 165, 45, 205, 330, 110, 240, 80, 300];
+let _hueMap = null;
+const _hash = s => { let h = 0; for (const c of String(s)) h = (h * 31 + c.codePointAt(0)) >>> 0; return h; };
+const spkHue = name => {
+  if (!_hueMap || !_hueMap.has(name)) {
+    _hueMap = new Map();
+    const names = new Set();
+    for (const e of DATA.entries) Object.values(e.speakers || {}).forEach(n => names.add(n));
+    names.add(name);
+    const taken = new Set();
+    for (const n of [...names].sort()) {
+      let i = _hash(n) % SPK_HUES.length;
+      while (taken.has(i) && taken.size < SPK_HUES.length) i = (i + 1) % SPK_HUES.length;
+      taken.add(i);
+      _hueMap.set(n, SPK_HUES[i]);
+    }
+  }
+  return _hueMap.get(name);
+};
 const spkColor = (name, alpha) => {
-  let h = 0;
-  for (const c of String(name)) h = (h * 31 + c.codePointAt(0)) % 360;
   const light = matchMedia("(prefers-color-scheme: light)").matches;
-  return `hsl(${h} 55% ${light ? 40 : 68}%${alpha ? " / " + alpha : ""})`;
+  return `hsl(${spkHue(name)} 60% ${light ? 38 : 68}%${alpha ? " / " + alpha : ""})`;
 };
 const avatarEl = name => {
   const a = el("span", "avatar", String(name).slice(0, 1).toUpperCase());
   a.style.color = spkColor(name);
-  a.style.background = spkColor(name, ".16");
-  a.style.borderColor = spkColor(name, ".5");
+  // Opaque fill (speaker tint composited over the page bg) — translucent
+  // fills let stacked neighbours show through each other.
+  a.style.background = `color-mix(in srgb, ${spkColor(name)} 20%, var(--bg))`;
+  a.style.borderColor = spkColor(name, ".55");
   a.title = name;
   return a;
 };

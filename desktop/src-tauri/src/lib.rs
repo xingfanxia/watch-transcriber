@@ -267,7 +267,7 @@ pub fn run() {
             let page = if ready { "index.html" } else { "bootstrap" };
             let url = format!("http://127.0.0.1:{port}/{page}");
             WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url.parse()?))
-                .title("语音档案")
+                .title("AX语音Vault")
                 .inner_size(1360.0, 900.0)
                 .min_inner_size(800.0, 600.0)
                 .build()?;

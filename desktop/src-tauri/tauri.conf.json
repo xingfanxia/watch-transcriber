@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "VoiceArchive",
+  "productName": "AX语音Vault",
   "version": "0.1.0",
   "identifier": "ai.ax.watch-transcriber",
   "build": {
