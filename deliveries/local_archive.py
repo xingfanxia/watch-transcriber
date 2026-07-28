@@ -7,7 +7,8 @@ Layout (LOCAL_ARCHIVE_DIR defaults to ./data, relative to repo root):
       daily.md                 # day rollup, regenerated from per-recording files
       daily.html               # rendered HTML rollup (LOCAL_ARCHIVE_HTML=0 to skip)
 
-Audio files are NOT copied (Voice Memos keeps the originals).
+Audio files are not copied here — enable the audio_archive delivery to get an
+AI-titled .m4a copy alongside each note.
 """
 
 import html
@@ -16,37 +17,15 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-
-def _slug(s: str) -> str:
-    s = re.sub(r"[^\w一-鿿 -]", "", s)
-    s = re.sub(r"\s+", "-", s.strip())
-    return s[:60] or "note"
-
-
-def _archive_root() -> Path:
-    return Path(os.environ.get("LOCAL_ARCHIVE_DIR", "./data")).expanduser().resolve()
-
-
-def _parse_dt(note: dict) -> datetime:
-    ts = note.get("timestamp")
-    if ts:
-        try:
-            return datetime.fromisoformat(ts)
-        except ValueError:
-            pass
-    return datetime.now()
+from . import archive_root, parse_note_dt, recording_stem
 
 
 def deliver(note: dict) -> bool:
-    dt = _parse_dt(note)
-    date_dir = _archive_root() / dt.strftime("%Y-%m-%d")
+    dt = parse_note_dt(note)
+    date_dir = archive_root() / dt.strftime("%Y-%m-%d")
     date_dir.mkdir(parents=True, exist_ok=True)
 
-    # The archive filename already carries HHMMSS; strip the title's leading
-    # timestamp so the slug doesn't duplicate the date.
-    display = re.sub(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}\s*", "", note["title"])
-    recording_name = f"{dt.strftime('%H%M%S')}-{_slug(display or note['title'])}.md"
-    recording_path = date_dir / recording_name
+    recording_path = date_dir / f"{recording_stem(note)}.md"
     # AI titles can differ between reprocess runs; the HHMMSS prefix is the
     # deterministic key. Drop stale outputs for the same recording so the
     # daily.md rollup doesn't accumulate duplicates.

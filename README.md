@@ -2,7 +2,7 @@
 
 [中文版](README.zh.md)
 
-Zero-cost Apple Watch voice transcription pipeline. Record on your wrist, get structured notes automatically.
+Apple Watch voice transcription pipeline (~¥2/hour of audio via 妙记). Record on your wrist, get structured notes automatically.
 
 ```
 Apple Watch (Voice Memos) → iCloud Sync → Mac detects new .m4a
@@ -45,6 +45,8 @@ Voice Memos in iOS 18+ has built-in transcription, but:
 **妙记 (`volc.lark.minutes`) is the default** (`STT_PROVIDER=lark`). It does speaker diarization **server-side in a single call** — no chunking, no cross-chunk speaker stitching. Verified across 5 real recordings (2026-06): 妙记 returned the exact speaker count on every two-person conversation (2/2/2/2), where chunk-stitched Gemini/OpenAI and the raw Doubao auc models all over-counted (3–5 speakers); it also swallowed a 3.45-hour file in one pass. Diarization, not transcription, was the real hard half — and 妙记 treats it as a first-class server-side job instead of a stitching afterthought.
 
 妙记 needs a publicly-fetchable FileURL, so the pipeline converts audio to a small 16kHz-mono mp3, uploads it to Volcano TOS, hands 妙记 a presigned URL, then deletes the object. Use a **Hong Kong** TOS region — it uploads far faster from outside mainland China (~700KB/s single-stream vs ~10–30KB/s to Shanghai) and 妙记 still fetches it fine. Requires `VOLC_API_KEY` + `VOLC_TOS_*` (see `.env.example`).
+
+To reduce duration-based 妙记 usage, installing Senko enables conservative local compaction of non-speech gaps longer than 10 seconds in the temporary upload mp3 only. Every gap keeps at least 3 seconds on both sides, the original m4a is never modified, provider timestamps are mapped back to original recording time, and any Senko/ffmpeg/duration-validation failure falls back to uploading the complete recording. Set `LARK_TRIM_LONG_SILENCE=0` to disable it; see `.env.example` for the safety-floor settings.
 
 **Gemini 3.5 Flash** and **OpenAI gpt-4o-transcribe-diarize** remain as fallbacks (`STT_PROVIDER=gemini|openai`); they auto-chunk long audio and stitch speaker labels across chunks (details below). We originally benchmarked these for mixed Chinese-English audio:
 
@@ -166,11 +168,35 @@ Available deliveries:
 |--------|-------------|---------------|
 | `file` | Save markdown to a folder | `OUTPUT_DIR` |
 | `local_archive` | Structured `data/YYYY-MM-DD/` archive with per-recording `.md`, `daily.md`, `daily.html` rollup | `LOCAL_ARCHIVE_DIR` (default `./data`), `LOCAL_ARCHIVE_HTML=0` to skip HTML |
+| `audio_archive` | AI-titled `.m4a` copy next to the archive note (`HHMMSS-<title>.m4a`) — Voice Memos has no rename API, so this is the browsable audio library. Original untouched; idempotent. Backfill: `scripts/backfill/backfill_audio_archive.py` | same `LOCAL_ARCHIVE_DIR` |
+| `manifest` | `data/manifest.json` — 1:1 note↔audio↔original map + AI topic category (taxonomy in `deliveries/manifest.py:CATEGORIES`), plus `data/by-topic/<分类>/` symlink views. Backfill/classify: `scripts/backfill/backfill_manifest.py` | same `LOCAL_ARCHIVE_DIR` |
+| `viewer` | Regenerates `data/index.html` — self-contained dark-mode archive UI (search, category filter, audio player with transcript-timestamp seek). Manual rebuild: `python3 -m deliveries.viewer` | same `LOCAL_ARCHIVE_DIR` |
+| `archive_git` | Auto-commits the `data/` repo (notes + manifest; audio/generated files gitignored — the delivery bootstraps `data/.gitignore` itself) and pushes if a remote exists. `data/` is a nested repo — this project's GitHub repo is public, personal data never goes there; its own remote must be PRIVATE | `data/` must be `git init`-ed |
+| `r2_backup` | Uploads the archive `.m4a` to a private Cloudflare R2 bucket (off-site audio backup; free ≤10GB/mo). Catch-up: `scripts/backfill/backfill_r2_audio.py` | local `wrangler` OAuth login; `R2_BUCKET` (default `watch-transcriber-audio`) |
 | `apple_notes` | Create an Apple Note | `APPLE_NOTES_FOLDER` |
 | `feishu` | Create a Feishu/Lark doc (optionally transfer ownership from the bot to you) | `FEISHU_FOLDER_TOKEN` or `FEISHU_WIKI_SPACE`; `FEISHU_DOC_OWNER_ID` for ownership transfer |
 | `feishu_notify` | DM summary via Feishu bot | `FEISHU_NOTIFY_USER_ID` |
 | `obsidian_git` | Commit to a GitHub repo | `OBSIDIAN_REPO`, `GITHUB_TOKEN` |
 | `agent` | Delegate to `claude -p` | `AGENT_DELIVERY_PROMPT` |
+
+**Order matters** within `DELIVERY_TARGETS`: `manifest` locates `local_archive`/`audio_archive` output on disk, and `viewer`/`archive_git` consume the manifest — keep `local_archive, audio_archive, manifest, viewer, archive_git, r2_backup` in that relative order.
+
+### Where the data lives (this repo is public ⚠️)
+
+`data/` (notes, transcripts, audio, manifest) is gitignored here and must never be committed to this repo. Backup legs:
+
+| What | Where | How |
+|---|---|---|
+| Notes + manifest, versioned | **private** `github.com/xingfanxia/watch-transcriber-data` | nested git repo inside `data/`; `archive_git` auto-commits + pushes per recording |
+| Audio (AI-titled copies) | **private** Cloudflare R2 bucket `watch-transcriber-audio` | `r2_backup` per recording; catch-up via `scripts/backfill/backfill_r2_audio.py` (ledger: `state/r2_uploaded.json`) |
+| Originals | Voice Memos + iCloud | never touched by the pipeline |
+
+### Desktop app (Tauri)
+
+`desktop/` is a thin Rust shell: a loopback axum server serves `data/` (with HTTP Range, so audio seeking works) and a webview opens the same generated `index.html` — no second viewer implementation. `cd desktop && npm run tauri dev` to run, `npm run tauri build` to bundle; `WATCH_TRANSCRIBER_DATA` overrides the archive location.
+
+- **Speaker tagging** (app-only — needs the loopback API): click a speaker chip in the detail pane to name `SPEAKER_N`, optionally batch-apply to every recording in the current filter; tags land in `manifest.json` (`speakers` field), are preserved across reprocesses, auto-commit + push to the private notes repo, and power the 说话人 sidebar filter + transcript display. The page auto-refreshes when the pipeline rebuilds the archive.
+- **Fresh machine**: clone this repo, open the app — it shows a bootstrap page until `python3 scripts/ops/restore_archive.py` restores `data/` (clones the private notes repo, pulls all audio back from R2, seeds the upload ledger, rebuilds the viewer), then continues automatically.
 
 ### Agent delivery examples
 
@@ -252,6 +278,9 @@ watch-transcriber/
 │   ├── __init__.py            # Delivery router
 │   ├── file.py                # Markdown file output
 │   ├── local_archive.py       # Structured data/YYYY-MM-DD/ archive (per-recording + daily rollup + HTML)
+│   ├── audio_archive.py       # AI-titled .m4a copy alongside the archive note
+│   ├── manifest.py            # data/manifest.json map + category taxonomy + by-topic/ views
+│   ├── viewer.py              # data/index.html generator (viewer_template.html)
 │   ├── apple_notes.py         # Apple Notes via AppleScript
 │   ├── feishu.py              # Feishu/Lark doc via lark-cli
 │   ├── feishu_notify.py       # Feishu bot DM with link to created doc

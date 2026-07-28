@@ -20,6 +20,8 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
+from deliveries.manifest import CATEGORIES, clean_category
+
 # Load .env without external dependency
 SCRIPT_DIR = Path(__file__).parent
 
@@ -809,7 +811,7 @@ def _gemini_transcribe(client, audio_path: Path) -> str:
     pyannote_pool = None
     pyannote_future = None
     if _pyannote_available():
-        print(f"  Starting global diarization (parallel with Gemini)...")
+        print("  Starting global diarization (parallel with Gemini)...")
         pyannote_pool = ThreadPoolExecutor(max_workers=1)
         pyannote_future = pyannote_pool.submit(_pyannote_diarize, audio_path)
 
@@ -857,7 +859,7 @@ def _gemini_transcribe(client, audio_path: Path) -> str:
 
         # Apply pyannote's global speaker timeline to the assembled transcript
         if pyannote_future is not None:
-            print(f"  Waiting for diarization...")
+            print("  Waiting for diarization...")
             t0 = time.time()
             timeline = pyannote_future.result()
             print(f"  Diarization done in {time.time()-t0:.0f}s ({len({s for _,_,s in timeline})} distinct speakers, {len(timeline)} intervals)")
@@ -918,7 +920,7 @@ def _openai_transcribe(audio_path: Path) -> str:
     pyannote_pool = None
     pyannote_future = None
     if _pyannote_available():
-        print(f"  Starting global diarization (parallel with OpenAI)...")
+        print("  Starting global diarization (parallel with OpenAI)...")
         pyannote_pool = ThreadPoolExecutor(max_workers=1)
         pyannote_future = pyannote_pool.submit(_pyannote_diarize, audio_path)
 
@@ -927,7 +929,7 @@ def _openai_transcribe(audio_path: Path) -> str:
     try:
         n = len(chunks)
         if n == 1:
-            print(f"  Transcribing with gpt-4o-transcribe-diarize (single chunk)...")
+            print("  Transcribing with gpt-4o-transcribe-diarize (single chunk)...")
         else:
             workers = min(CHUNK_PARALLELISM, n)
             print(f"  Transcribing with gpt-4o-transcribe-diarize in {n} chunks ({workers} parallel)...")
@@ -978,7 +980,7 @@ def _openai_transcribe(audio_path: Path) -> str:
                 text = _join_chunks_dropping_overlap(chunk_records)
 
         if pyannote_future is not None:
-            print(f"  Waiting for diarization...")
+            print("  Waiting for diarization...")
             t0 = time.time()
             timeline = pyannote_future.result()
             print(f"  Diarization done in {time.time()-t0:.0f}s ({len({s for _,_,s in timeline})} distinct speakers, {len(timeline)} intervals)")
@@ -996,11 +998,40 @@ def _lark_transcribe(audio_path: Path) -> str:
 
     妙记 does its own server-side diarization (best speaker accuracy of all
     providers tested) in a single call, so this path skips chunking and the
-    Senko/pyannote reconcile entirely. watch-transcriber auto-detects the
-    speaker count (LARK_NUM_SPEAKERS, default 0 = auto)."""
+    Senko/pyannote speaker reconcile entirely. When Senko is installed, a local
+    speech pass may conservatively compact >10s non-speech gaps in the temporary
+    upload copy; it never changes the original recording or 妙记 speaker labels.
+    watch-transcriber auto-detects the speaker count (LARK_NUM_SPEAKERS,
+    default 0 = auto)."""
     from volc_lark import lark_transcribe
+
     num_speakers = int(os.environ.get("LARK_NUM_SPEAKERS", "0"))
-    return lark_transcribe(audio_path, num_speakers)
+    trim_long_silence = os.environ.get(
+        "LARK_TRIM_LONG_SILENCE", "1"
+    ).lower() not in ("0", "false", "no", "off")
+    speech_segments = None
+    if trim_long_silence:
+        if _senko_installed():
+            try:
+                print("  Detecting long non-speech gaps locally with Senko...")
+                speech_segments = _senko_diarize(audio_path)
+                if not speech_segments:
+                    print(
+                        "  [妙记] WARN: Senko found no speech; "
+                        "uploading the complete recording"
+                    )
+            except Exception as e:  # fail open: transcription must still run
+                print(
+                    f"  [妙记] WARN: Senko gap detection failed ({e}); "
+                    "uploading the complete recording"
+                )
+                speech_segments = None
+        else:
+            print(
+                "  [妙记] long-silence compaction unavailable "
+                "(Senko is not installed); uploading the complete recording"
+            )
+    return lark_transcribe(audio_path, num_speakers, speech_segments)
 
 
 # ---------------------------------------------------------------------------
@@ -1023,9 +1054,10 @@ TRANSCRIBE_PROMPT = """请将这段音频转录成文字，并标注说话人。
 [00:00:45 - 00:01:05] SPEAKER_1: Hello, my name is Zhang San.
 """
 
-SUMMARIZE_PROMPT = """You are analyzing a diarized transcript. Produce a JSON object with these fields:
+SUMMARIZE_PROMPT = f"""You are analyzing a diarized transcript. Produce a JSON object with these fields:
 
 - title: a short descriptive title naming what the recording is actually about (≤12字 if Chinese, ≤8 words if English). Use the transcript's dominant language. No dates, no quotes, no generic labels like "Voice Note"/"录音"/"对话记录"
+- category: the recording's dominant topic/scene — EXACTLY one of: {" / ".join(CATEGORIES)}
 - summary_en: 2-3 sentence summary in English
 - summary_zh: 2-3 sentence summary in Chinese (中文摘要)
 - key_points_en: 3-7 key points in English
@@ -1033,14 +1065,21 @@ SUMMARIZE_PROMPT = """You are analyzing a diarized transcript. Produce a JSON ob
 - action_items: todos or follow-ups mentioned (bilingual list; empty list if none)
 
 Return ONLY valid JSON, no markdown fences:
-{
+{{
   "title": "...",
+  "category": "...",
   "summary_en": "...",
   "summary_zh": "...",
   "key_points_en": ["...", "..."],
   "key_points_zh": ["...", "..."],
   "action_items": ["...", "..."]
-}
+}}
+
+Transcript:
+"""
+
+TITLE_ONLY_PROMPT = """为下面的对话转写起一个标题:中文≤12字(或英文≤8词,跟随转写的主导语言),\
+点出内容主题。只返回标题文本本身 —— 不要引号、日期、标点装饰或任何其他文字。
 
 Transcript:
 """
@@ -1077,10 +1116,18 @@ def transcribe_and_summarize(audio_path: Path) -> dict:
         print("  Transcription returned empty text")
         return {"transcript": ""}
 
-    # Stage 2: summarize (text input → JSON output, no loop risk).
-    # At temp=1.0 Gemini occasionally emits unparseable JSON or omits fields;
-    # retry on unusable output, then degrade gracefully (fallback title,
-    # empty summary) rather than blocking delivery.
+    result = summarize_transcript(client, transcript)
+    result["transcript"] = transcript
+    return result
+
+
+def summarize_transcript(client, transcript: str) -> dict:
+    """Summarize stage only (text → JSON title/summaries/points/category).
+
+    At temp=1.0 Gemini occasionally emits unparseable JSON or omits fields;
+    retry on unusable output, then degrade gracefully rather than blocking
+    delivery. Shared by the live pipeline and repair scripts so both get the
+    same fallback behavior."""
     print(f"  Summarizing with {GEMINI_MODEL}...")
     for attempt in range(3):
         summary_resp = client.models.generate_content(
@@ -1092,7 +1139,20 @@ def transcribe_and_summarize(audio_path: Path) -> dict:
         if _clean_ai_title(result.get("title", "")):
             break
         print(f"  [summarize] unusable output (attempt {attempt + 1}/3), retrying")
-    result["transcript"] = transcript
+    if not _clean_ai_title(result.get("title", "")):
+        # The JSON channel failed three times (observed 2026-07-26: repair-proof
+        # malformed output on all attempts → note shipped as "Voice Note").
+        # Recover the title over a plain-text channel — a bare string cannot
+        # fail to parse. Summary may stay empty; the transcript is intact.
+        print("  [summarize] JSON channel failed 3x; plain-text title fallback")
+        try:
+            t = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=[TITLE_ONLY_PROMPT + transcript[:8000]],
+            )
+            result["title"] = (t.text or "").strip()
+        except Exception as e:
+            print(f"  [summarize] title fallback failed too: {e}")
     return result
 
 
@@ -1222,7 +1282,7 @@ def format_note(audio_path: Path, result: dict) -> dict:
         f"# {title}",
         "",
         f"**Recorded:** {timestamp}",
-        f"**Source:** Apple Watch Voice Memo",
+        "**Source:** Apple Watch Voice Memo",
         f"**File:** `{audio_path.name}`",
         "",
     ]
@@ -1305,6 +1365,7 @@ def format_note(audio_path: Path, result: dict) -> dict:
         "transcript": transcript.strip(),
         "summary": f"{summary_en}\n\n{summary_zh}".strip(),
         "todos": action_items,
+        "category": clean_category(result.get("category")),
         "audio_path": str(audio_path),
         "timestamp": timestamp,
         "markdown": "\n".join(lines),
@@ -1415,7 +1476,7 @@ def run_doctor() -> int:
     if VOICE_MEMOS_DIR.exists():
         try:
             m4a_count = sum(1 for f in VOICE_MEMOS_DIR.iterdir() if f.suffix == ".m4a")
-            check(f"Voice Memos directory readable", True,
+            check("Voice Memos directory readable", True,
                   note=f"{m4a_count} .m4a files at {VOICE_MEMOS_DIR}")
         except PermissionError:
             check("Voice Memos directory readable", False,
@@ -1462,7 +1523,7 @@ def _check_delivery(target: str, check) -> None:
             out.mkdir(parents=True, exist_ok=True)
         except OSError:
             ok = False
-        check(f"file: OUTPUT_DIR writable", ok, note=str(out))
+        check("file: OUTPUT_DIR writable", ok, note=str(out))
     elif target == "local_archive":
         out = Path(os.environ.get("LOCAL_ARCHIVE_DIR", "./data")).expanduser().resolve()
         ok = True
@@ -1470,7 +1531,7 @@ def _check_delivery(target: str, check) -> None:
             out.mkdir(parents=True, exist_ok=True)
         except OSError:
             ok = False
-        check(f"local_archive: LOCAL_ARCHIVE_DIR writable", ok, note=str(out))
+        check("local_archive: LOCAL_ARCHIVE_DIR writable", ok, note=str(out))
     elif target == "apple_notes":
         check("apple_notes: osascript available", bool(shutil.which("osascript")))
     elif target == "feishu":

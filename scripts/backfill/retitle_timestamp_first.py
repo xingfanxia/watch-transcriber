@@ -86,7 +86,7 @@ def main():
     ap.add_argument("--yes", action="store_true")
     args = ap.parse_args()
 
-    rows = [json.loads(l) for l in LEDGER.read_text().splitlines() if l.strip()]
+    rows = [json.loads(ln) for ln in LEDGER.read_text().splitlines() if ln.strip()]
     plan = []
     for r in rows:
         new = to_new(r["new_title"])

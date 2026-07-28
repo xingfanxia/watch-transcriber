@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>语音档案</title>
+<style>
+  :root {
+    /* Codex-style warm graphite: neutral (not blue-tinted) dark, hierarchy by
+       lightness steps, one soft-blue accent for links/active only.
+       --amber/--amber-deep are legacy token names, now the accent pair. */
+    --bg: #1a1a1a; --panel: #232323; --panel-2: #2c2c2c; --line: #343434;
+    --ink: #ececec; --dim: #a0a0a0; --faint: #6f6f6f; --tick: #4a4a4a;
+    --amber: #6cb0f5; --amber-deep: #4a90d9; --glow: rgba(108,176,245,.13);
+    --serif: "PingFang SC", -apple-system, "Helvetica Neue", sans-serif;
+    --sans: "PingFang SC", -apple-system, "Helvetica Neue", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #ffffff; --panel: #f7f7f7; --panel-2: #ececec; --line: #e2e2e2;
+      --ink: #242424; --dim: #6e6e6e; --faint: #9a9a9a; --tick: #cfcfcf;
+      --amber: #2f7fd6; --amber-deep: #559ce3; --glow: rgba(47,127,214,.12);
+    }
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg); color: var(--ink); font-family: var(--sans);
+    font-size: 14px; line-height: 1.6; overflow: hidden;
+  }
+  button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+  :focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; border-radius: 2px; }
+
+  .app { display: grid; grid-template-columns: 208px minmax(340px, 1fr) minmax(0, 1.2fr); height: 100%; }
+
+  /* ---------- sidebar ---------- */
+  .side { border-right: 1px solid var(--line); padding: 22px 18px; display: flex; flex-direction: column; gap: 18px; overflow-y: auto; }
+  .brand h1 { font-family: var(--serif); font-size: 22px; font-weight: 900; letter-spacing: .04em; }
+  .brand .sub { font-family: var(--mono); font-size: 10.5px; color: var(--faint); margin-top: 4px; letter-spacing: .02em; }
+  .search input {
+    width: 100%; background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    color: var(--ink); font: 13px var(--sans); padding: 7px 11px;
+  }
+  .search input::placeholder { color: var(--faint); }
+  .search input:focus { outline: none; border-color: var(--amber-deep); }
+  .cats { display: flex; flex-direction: column; gap: 2px; }
+  .cat {
+    display: flex; justify-content: space-between; align-items: baseline;
+    padding: 6px 10px; border-radius: 6px; color: var(--dim); text-align: left;
+  }
+  .cat:hover { background: var(--panel); color: var(--ink); }
+  .cat.on { background: var(--panel-2); color: var(--ink); }
+  .cat.on .n { color: var(--amber); }
+  .cat .n { font-family: var(--mono); font-size: 11px; color: var(--faint); }
+  .stats { margin-top: auto; border-top: 1px solid var(--line); padding-top: 14px;
+           font-family: var(--mono); font-size: 11px; color: var(--faint); line-height: 2; }
+  .stats b { color: var(--dim); font-weight: 400; }
+
+  /* ---------- list ---------- */
+  .list { overflow-y: auto; border-right: 1px solid var(--line); scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+  .day { padding: 18px 22px 4px; position: sticky; top: 0; background: var(--bg);
+         font-family: var(--mono); font-size: 11px; color: var(--faint); letter-spacing: .08em; }
+  .day::after { content: ""; display: block; border-bottom: 1px solid var(--line); margin-top: 6px; }
+  .row { display: block; width: 100%; text-align: left; padding: 10px 22px 12px; border-left: 2px solid transparent; }
+  .row:hover { background: var(--panel); }
+  .row.on { background: var(--panel-2); border-left-color: var(--amber); }
+  .row-top { display: flex; align-items: baseline; gap: 10px; }
+  .row .t { font-family: var(--mono); font-size: 11.5px; color: var(--dim); }
+  .row .ti { font-family: var(--serif); font-size: 15px; font-weight: 700; flex: 1;
+             overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row.on .ti { color: var(--ink); }
+  .row .dur { font-family: var(--mono); font-size: 10.5px; color: var(--faint); }
+  .row .noaudio { font-size: 10px; color: var(--faint); border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; }
+  /* signature: 24h dial strip — the recording glows at its hour of day */
+  .dial { position: relative; height: 3px; margin-top: 8px; background: var(--panel-2); border-radius: 2px; overflow: visible; }
+  .dial i { position: absolute; top: 0; height: 3px; min-width: 3px; border-radius: 2px;
+            background: var(--tick); }
+  .row.on .dial i, .row:hover .dial i { background: var(--amber); box-shadow: 0 0 8px 1px var(--glow); }
+  .empty { padding: 60px 24px; color: var(--faint); text-align: center; font-size: 13px; }
+
+  /* ---------- detail ---------- */
+  .detail { overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+  .detail-pad { padding: 26px 30px 60px; }
+  .placeholder { height: 100%; display: grid; place-items: center; color: var(--faint); font-size: 13px; }
+  .d-cat { font-family: var(--mono); font-size: 11px; color: var(--amber); letter-spacing: .12em; }
+  .d-title { font-family: var(--serif); font-size: 24px; font-weight: 900; line-height: 1.35; margin: 6px 0 4px; }
+  .d-meta { font-family: var(--mono); font-size: 11px; color: var(--faint); margin-bottom: 18px; }
+  .player { display: flex; align-items: center; gap: 12px; background: var(--panel);
+            border: 1px solid var(--line); border-radius: 14px; padding: 10px 14px;
+            position: sticky; top: 14px; z-index: 2; box-shadow: 0 6px 18px rgba(0,0,0,.25); }
+  .play-btn { width: 34px; height: 34px; border-radius: 50%; background: var(--amber); color: #fff;
+              display: grid; place-items: center; font-size: 13px; flex: none; }
+  .play-btn:hover { filter: brightness(1.1); }
+  .seek { flex: 1; height: 4px; background: var(--panel-2); border-radius: 2px; position: relative; cursor: pointer; }
+  .seek .fill { position: absolute; inset: 0 auto 0 0; width: 0; background: var(--amber); border-radius: 2px; }
+  .ptime { font-family: var(--mono); font-size: 11px; color: var(--dim); flex: none; }
+  .side-sec { font-family: var(--mono); font-size: 10.5px; color: var(--faint); letter-spacing: .12em;
+              margin: 14px 0 2px; padding: 0 10px; }
+  .spk-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+  .spk-chip { display: flex; gap: 6px; align-items: baseline; background: var(--panel);
+              border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px;
+              font-size: 12px; color: var(--dim); }
+  .spk-chip.named { color: var(--ink); border-color: var(--amber-deep); }
+  .spk-chip:not(:disabled):hover { border-color: var(--amber); color: var(--ink); }
+  .spk-chip .sp-slot { font-family: var(--mono); font-size: 10px; color: var(--faint); }
+  .spk-pop { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; background: var(--panel);
+             border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin: 10px 0; }
+  .spk-pop input { background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+                   color: var(--ink); font: 13px var(--sans); padding: 6px 10px; min-width: 200px; }
+  .spk-pop input:focus { outline: none; border-color: var(--amber-deep); }
+  .spk-btn { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px;
+             padding: 6px 12px; font-size: 12px; }
+  .spk-btn:hover { border-color: var(--amber); color: var(--amber); }
+  .spk-hint { flex-basis: 100%; font-size: 11px; color: var(--faint); }
+  .sec { font-family: var(--mono); font-size: 11px; color: var(--faint); letter-spacing: .14em; margin: 26px 0 10px; }
+  .sec::after { content: ""; display: inline-block; width: 40px; border-bottom: 1px solid var(--line); margin-left: 10px; vertical-align: middle; }
+  .d-sum { color: var(--ink); max-width: 62ch; }
+  .d-sum + .d-sum { color: var(--dim); margin-top: 10px; }
+  .kps { max-width: 62ch; padding-left: 18px; color: var(--dim); }
+  .kps li { margin: 4px 0; }
+  .todos { max-width: 62ch; list-style: none; }
+  .todos li { margin: 4px 0; color: var(--dim); }
+  .todos li::before { content: "□ "; color: var(--amber); font-family: var(--mono); }
+  .tr { font-family: var(--mono); font-size: 12px; line-height: 1.9; max-width: 76ch; }
+  .tr .ln { margin: 2px 0; }
+  .tr .ts { color: var(--faint); padding: 0 2px; border-radius: 3px; }
+  .tr button.ts:hover { color: var(--amber); background: var(--glow); }
+  .tr .sp { color: var(--amber-deep); }
+  .tr .sp.alt { color: var(--dim); }
+  .tr .tx { color: var(--ink); }
+  @media (prefers-color-scheme: light) { .player { box-shadow: 0 4px 14px rgba(90,70,30,.12); } }
+
+  @media (max-width: 900px) {
+    body { overflow: auto; }
+    .app { display: block; height: auto; }
+    .side { border-right: none; border-bottom: 1px solid var(--line); }
+    .stats { margin-top: 8px; }
+    .list { border-right: none; max-height: 45vh; }
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .row, .cat, .dial i, .play-btn { transition: background .12s ease, color .12s ease, box-shadow .12s ease; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <nav class="side">
+    <div class="brand">
+      <h1>语音档案</h1>
+      <div class="sub" id="brandSub"></div>
+    </div>
+    <div class="search"><input id="q" type="search" placeholder="搜索标题或转写 (/)" aria-label="搜索"></div>
+    <div class="cats" id="cats" role="listbox" aria-label="分类"></div>
+    <div class="stats" id="stats"></div>
+  </nav>
+  <main class="list" id="list" aria-label="录音列表"></main>
+  <section class="detail" id="detail"><div class="placeholder">选择一条录音开始</div></section>
+</div>
+<audio id="audio" preload="none"></audio>
+<script id="payload" type="application/json">__PAYLOAD__</script>
+<script>
+"use strict";
+const DATA = JSON.parse(document.getElementById("payload").textContent);
+const $  = (s, el) => (el || document).querySelector(s);
+const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
+
+const fmtDur = s => {
+  if (s == null) return "";
+  s = Math.round(s);
+  const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60;
+  return h ? `${h}:${String(m).padStart(2,"0")}:${String(x).padStart(2,"0")}` : `${m}:${String(x).padStart(2,"0")}`;
+};
+
+let state = { cat: null, spk: null, q: "", sel: null };
+/* Editing needs the desktop app's loopback API; file:// stays read-only. */
+const CAN_EDIT = location.protocol.startsWith("http");
+
+const slotsOf = e => [...new Set((e.transcript || "").match(/SPEAKER[_ ]?\d+/g) || [])];
+const speakerNames = () => {
+  const names = new Map();
+  for (const e of DATA.entries)
+    for (const n of Object.values(e.speakers || {}))
+      names.set(n, (names.get(n) || 0) + 1);
+  return names;
+};
+
+/* ---------- sidebar ---------- */
+function renderSide() {
+  $("#brandSub").textContent = `${DATA.span} · ${DATA.entries.length} 条`;
+  const cats = $("#cats"); cats.textContent = "";
+  const mk = (label, key, count) => {
+    const b = el("button", "cat" + ((state.cat ?? null) === key ? " on" : ""));
+    b.setAttribute("role", "option");
+    b.append(el("span", null, label), el("span", "n", String(count)));
+    b.onclick = () => { state.cat = key; renderSide(); renderList(); };
+    cats.append(b);
+  };
+  mk("全部", null, DATA.entries.length);
+  for (const c of DATA.categories) {
+    const n = DATA.entries.filter(e => e.category === c).length;
+    if (n) mk(c, c, n);
+  }
+  const names = speakerNames();
+  if (names.size) {
+    cats.append(el("div", "side-sec", "说话人"));
+    const mkSpk = (label, key, count) => {
+      const b = el("button", "cat" + ((state.spk ?? null) === key ? " on" : ""));
+      b.append(el("span", null, label), el("span", "n", String(count)));
+      b.onclick = () => { state.spk = state.spk === key ? null : key; renderSide(); renderList(); };
+      cats.append(b);
+    };
+    for (const [n, c] of [...names.entries()].sort((a, b) => b[1] - a[1])) mkSpk(n, n, c);
+  }
+  const total = DATA.entries.reduce((a, e) => a + (e.duration || 0), 0);
+  const night = DATA.entries.filter(e => { const h = +e.time.slice(0,2); return h < 8; }).length;
+  $("#stats").innerHTML = "";
+  $("#stats").append(
+    Object.assign(el("div"), {innerHTML: `共 <b>${(total / 3600).toFixed(1)}</b> 小时`}),
+    Object.assign(el("div"), {innerHTML: `<b>${Math.round(night / DATA.entries.length * 100)}%</b> 录于凌晨`}),
+  );
+}
+
+/* ---------- list ---------- */
+function visible() {
+  const q = state.q.trim().toLowerCase();
+  return DATA.entries.filter(e =>
+    (!state.cat || e.category === state.cat) &&
+    (!state.spk || Object.values(e.speakers || {}).includes(state.spk)) &&
+    (!q || e.title.toLowerCase().includes(q) ||
+      Object.values(e.speakers || {}).join(" ").toLowerCase().includes(q) ||
+      (e.transcript || "").toLowerCase().includes(q)));
+}
+function renderList() {
+  const list = $("#list"); list.textContent = "";
+  const items = visible();
+  if (!items.length) { list.append(el("div", "empty", "没有匹配的录音 — 换个词或清掉筛选试试")); return; }
+  let day = null;
+  for (const e of items) {
+    if (e.date !== day) { day = e.date; list.append(el("div", "day", `${e.date} ${e.weekday}`)); }
+    const row = el("button", "row" + (state.sel === e.key ? " on" : ""));
+    row.dataset.key = e.key;
+    const top = el("div", "row-top");
+    top.append(el("span", "t", e.time), el("span", "ti", e.ai_title));
+    if (e.audio) top.append(el("span", "dur", fmtDur(e.duration)));
+    else top.append(el("span", "noaudio", "无音频"));
+    const dial = el("div", "dial"), tick = el("i");
+    const startPct = (e.hour_frac / 24) * 100;
+    const widPct = Math.min(((e.duration || 60) / 86400) * 100 * 6, 100 - startPct); /* ×6 so a 1h note is visible */
+    tick.style.left = startPct + "%"; tick.style.width = Math.max(widPct, .35) + "%";
+    dial.append(tick);
+    row.append(top, dial);
+    row.onclick = () => select(e.key);
+    list.append(row);
+  }
+}
+
+/* ---------- detail + player ---------- */
+const audio = $("#audio");
+let playing = null;
+function select(key) {
+  state.sel = key;
+  const e = DATA.entries.find(x => x.key === key);
+  renderList();
+  const row = $(`.row[data-key="${CSS.escape(key)}"]`);
+  if (row) row.scrollIntoView({ block: "nearest" });
+  const d = $("#detail"); d.textContent = "";
+  const pad = el("div", "detail-pad");
+
+  pad.append(el("div", "d-cat", e.category), el("h2", "d-title", e.ai_title),
+             el("div", "d-meta", `${e.date} ${e.time} · ${e.original || "原始文件已删除"}${e.duration ? " · " + fmtDur(e.duration) : ""}`));
+
+  const slots = slotsOf(e);
+  if (slots.length) {
+    const row = el("div", "spk-row");
+    for (const slot of slots) {
+      const name = (e.speakers || {})[slot];
+      const chip = el("button", "spk-chip" + (name ? " named" : ""));
+      chip.append(el("span", "sp-slot", slot.replace("SPEAKER_", "S")),
+                  el("span", null, name || "未标注"));
+      if (CAN_EDIT) chip.onclick = () => openSpeakerEditor(e, slot, chip);
+      else chip.disabled = true;
+      row.append(chip);
+    }
+    pad.append(row);
+  }
+
+  if (e.audio) pad.append(buildPlayer(e));
+
+  if (e.summary_zh || e.summary_en) {
+    pad.append(el("div", "sec", "摘要"));
+    if (e.summary_zh) pad.append(el("p", "d-sum", e.summary_zh));
+    if (e.summary_en) pad.append(el("p", "d-sum", e.summary_en));
+  }
+  if (e.key_points && e.key_points.length) {
+    pad.append(el("div", "sec", "要点"));
+    const ul = el("ul", "kps");
+    e.key_points.forEach(k => ul.append(el("li", null, k)));
+    pad.append(ul);
+  }
+  if (e.todos && e.todos.length) {
+    pad.append(el("div", "sec", "待办"));
+    const ul = el("ul", "todos");
+    e.todos.forEach(k => ul.append(el("li", null, k)));
+    pad.append(ul);
+  }
+  if (e.transcript) {
+    pad.append(el("div", "sec", "转写"));
+    pad.append(buildTranscript(e));
+  }
+  d.append(pad);
+  d.scrollTop = 0;
+}
+
+function buildPlayer(e) {
+  const box = el("div", "player");
+  const btn = el("button", "play-btn", "▶");
+  btn.setAttribute("aria-label", "播放");
+  const seek = el("div", "seek"), fill = el("div", "fill");
+  seek.append(fill);
+  const time = el("span", "ptime", "0:00");
+  box.append(btn, seek, time);
+  const load = () => {
+    if (playing !== e.key) { audio.src = e.audio; playing = e.key; }
+  };
+  btn.onclick = () => { load(); audio.paused ? audio.play() : audio.pause(); };
+  seek.onclick = ev => {
+    load();
+    const r = seek.getBoundingClientRect();
+    if (audio.duration) audio.currentTime = (ev.clientX - r.left) / r.width * audio.duration;
+  };
+  audio.onplay  = () => { if (playing === e.key) { btn.textContent = "⏸"; btn.setAttribute("aria-label", "暂停"); } };
+  audio.onpause = () => { if (playing === e.key) { btn.textContent = "▶"; btn.setAttribute("aria-label", "播放"); } };
+  audio.ontimeupdate = () => {
+    if (playing !== e.key || !audio.duration) return;
+    fill.style.width = audio.currentTime / audio.duration * 100 + "%";
+    time.textContent = fmtDur(audio.currentTime) + " / " + fmtDur(audio.duration);
+  };
+  box.seekTo = sec => { load(); audio.currentTime = sec; audio.play(); };
+  return box;
+}
+
+const LINE_RE = /^\[(\d{2}):(\d{2}):(\d{2})[^\]]*\]\s*(SPEAKER[_ ]?\d+|[^:：]{1,20})?[:：]?\s*(.*)$/;
+function buildTranscript(e) {
+  const box = el("div", "tr");
+  const speakers = new Map();
+  for (const raw of e.transcript.split("\n")) {
+    if (!raw.trim()) continue;
+    const ln = el("div", "ln");
+    const m = raw.match(LINE_RE);
+    if (m) {
+      const sec = (+m[1]) * 3600 + (+m[2]) * 60 + (+m[3]);
+      const label = raw.slice(0, raw.indexOf("]") + 1);
+      let ts;
+      if (e.audio) {
+        ts = el("button", "ts", label);
+        ts.title = "跳到这里播放";
+        ts.onclick = () => { const p = $(".player"); if (p && p.seekTo) p.seekTo(sec); };
+      } else ts = el("span", "ts", label);
+      ln.append(ts);
+      if (m[4]) {
+        if (!speakers.has(m[4])) speakers.set(m[4], speakers.size);
+        const disp = (e.speakers || {})[m[4]] || m[4];
+        ln.append(el("span", "sp" + (speakers.get(m[4]) % 2 ? " alt" : ""), " " + disp + ": "));
+      } else ln.append(document.createTextNode(" "));
+      ln.append(el("span", "tx", m[5] || ""));
+    } else ln.append(el("span", "tx", raw));
+    box.append(ln);
+  }
+  return box;
+}
+
+/* ---------- speaker tagging (desktop app only) ---------- */
+function openSpeakerEditor(e, slot, anchor) {
+  document.querySelectorAll(".spk-pop").forEach(p => p.remove());
+  const pop = el("div", "spk-pop");
+  const input = el("input");
+  input.placeholder = "输入名字,留空=清除标注";
+  input.value = (e.speakers || {})[slot] || "";
+  const dl = el("datalist"); dl.id = "spk-names";
+  for (const n of speakerNames().keys()) { const o = el("option"); o.value = n; dl.append(o); }
+  input.setAttribute("list", "spk-names");
+  const one = el("button", "spk-btn", "仅本条");
+  const n_batch = visible().filter(x => slotsOf(x).includes(slot)).length;
+  const batch = el("button", "spk-btn", `应用到当前筛选 ${n_batch} 条`);
+  const hint = el("div", "spk-hint",
+    `批量 = 当前筛选中所有含 ${slot} 的录音的该槽位;分身份不保证跨录音一致,可随时改回`);
+  one.onclick = () => applySpeakers([e], slot, input.value.trim(), pop);
+  batch.onclick = () => applySpeakers(visible().filter(x => slotsOf(x).includes(slot)),
+                                      slot, input.value.trim(), pop);
+  input.onkeydown = ev => { if (ev.key === "Enter") one.click(); if (ev.key === "Escape") pop.remove(); };
+  pop.append(input, dl, one, batch, hint);
+  anchor.after(pop);
+  input.focus();
+}
+
+function applySpeakers(targets, slot, name, pop) {
+  const updates = targets.map(t => ({ key: t.key, speakers: { [slot]: name } }));
+  fetch("/api/speakers", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ updates }),
+  }).then(r => {
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    for (const t of targets) {
+      t.speakers = t.speakers || {};
+      if (name) t.speakers[slot] = name; else delete t.speakers[slot];
+    }
+    pop.remove();
+    renderSide(); renderList();
+    if (state.sel) select(state.sel);
+  }).catch(err => { pop.querySelector(".spk-hint").textContent = `保存失败: ${err.message}`; });
+}
+
+/* ---------- keyboard ---------- */
+document.addEventListener("keydown", ev => {
+  if (ev.target.tagName === "INPUT") { if (ev.key === "Escape") { ev.target.value = ""; state.q = ""; renderList(); ev.target.blur(); } return; }
+  if (ev.key === "/") { ev.preventDefault(); $("#q").focus(); return; }
+  if (ev.key === " " && state.sel) { ev.preventDefault(); const p = $(".play-btn"); if (p) p.click(); return; }
+  if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+    ev.preventDefault();
+    const items = visible(); if (!items.length) return;
+    let i = items.findIndex(x => x.key === state.sel);
+    i = ev.key === "ArrowDown" ? Math.min(i + 1, items.length - 1) : Math.max(i - 1, 0);
+    select(items[i].key);
+  }
+});
+$("#q").addEventListener("input", ev => { state.q = ev.target.value; renderList(); });
+
+/* Auto-refresh when the pipeline rebuilds the archive. Only meaningful when
+   served over http (the desktop app's loopback server); file:// can't fetch. */
+if (location.protocol.startsWith("http")) {
+  const stamp = () => fetch("manifest.json", { cache: "no-store" })
+    .then(r => r.headers.get("last-modified"));
+  stamp().then(t0 => setInterval(() =>
+    stamp().then(t => { if (t && t !== t0) location.reload(); }).catch(() => {}),
+    30000)).catch(() => {});
+}
+
+renderSide();
+renderList();
+</script>
+</body>
+</html>

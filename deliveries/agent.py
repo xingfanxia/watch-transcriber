@@ -39,7 +39,7 @@ def deliver(note: dict) -> bool:
             print(f"[delivery:agent] claude -p failed: {result.stderr[:500]}")
             return False
 
-        print(f"[delivery:agent] delivered via claude -p")
+        print("[delivery:agent] delivered via claude -p")
         return True
     except FileNotFoundError:
         print("[delivery:agent] 'claude' CLI not found in PATH")

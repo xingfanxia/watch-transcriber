@@ -2,7 +2,7 @@
 
 [English](README.md)
 
-零成本 Apple Watch 语音转文字流水线。手腕上录音，自动生成结构化笔记。
+Apple Watch 语音转文字流水线（妙记转写约 2 元/小时）。手腕上录音，自动生成结构化笔记。
 
 ```
 Apple Watch (语音备忘录) → iCloud 同步 → Mac 检测新 .m4a
@@ -45,6 +45,8 @@ iOS 18+ 的语音备忘录自带转写功能，但是：
 **默认走 妙记（`volc.lark.minutes`，`STT_PROVIDER=lark`）。** 它**一次调用就在服务端做完说话人分离**——不切块、不跨块缝合。在 5 段真实录音上验证（2026-06）：妙记对 4 段两人对话**每段都精准判 2 人**，而切块缝合的 Gemini/OpenAI 以及豆包 auc 模型全都虚高（3–5 人）；3.45 小时的长文件也一次吃下。难的从来不是转写，是「谁在说」——妙记把它当成服务端的一等任务，而不是缝合的事后补救。
 
 妙记需要一个公网可下载的 FileURL，所以流水线会先把音频转成 16kHz 单声道小 mp3，上传到火山 TOS，给妙记一个预签名链接，转完再删掉。**TOS 建议用香港区域**——从中国大陆以外上传快得多（单线程 ~700KB/s vs 上海 ~10–30KB/s），妙记照样能取。需要 `VOLC_API_KEY` + `VOLC_TOS_*`（见 `.env.example`）。
+
+为减少妙记按音频时长消耗的额度，安装 Senko 后，默认会在本地识别持续超过 10 秒的无人声间隙，并且只压缩发送给妙记的临时 mp3。安全约束是：每个间隙两端至少保留 3 秒；原始 m4a 永远不修改；妙记返回的时间戳会映射回原录音时间；Senko、ffmpeg 或时长校验任一步失败，都会自动回退到完整录音。设置 `LARK_TRIM_LONG_SILENCE=0` 可关闭，阈值见 `.env.example`。
 
 **Gemini 3.5 Flash** 和 **OpenAI gpt-4o-transcribe-diarize** 作为兜底（`STT_PROVIDER=gemini|openai`），它们会自动切块长音频并跨块缝合说话人标签（详见下文）。我们最初对比中英混合音频的方案：
 
@@ -152,11 +154,35 @@ DELIVERY_TARGETS=file,apple_notes
 |------|------|---------|
 | `file` | 保存为 Markdown 文件 | `OUTPUT_DIR` |
 | `local_archive` | 结构化 `data/YYYY-MM-DD/` 归档:单录音 `.md` + `daily.md` + `daily.html` 汇总 | `LOCAL_ARCHIVE_DIR`(默认 `./data`),`LOCAL_ARCHIVE_HTML=0` 跳过 HTML |
+| `audio_archive` | AI 标题命名的 `.m4a` 拷贝,与归档笔记并排(`HHMMSS-<标题>.m4a`)—— Voice Memos 无重命名 API,这就是可浏览的录音库。不动原件、幂等。存量回填:`scripts/backfill/backfill_audio_archive.py` | 同 `LOCAL_ARCHIVE_DIR` |
+| `manifest` | `data/manifest.json` —— 笔记↔音频↔原件 1:1 映射 + AI 话题分类(分类表在 `deliveries/manifest.py:CATEGORIES`),并生成 `data/by-topic/<分类>/` 符号链接视图。回填/分类:`scripts/backfill/backfill_manifest.py` | 同 `LOCAL_ARCHIVE_DIR` |
+| `viewer` | 重新生成 `data/index.html` —— 自包含暗色档案 UI(搜索、分类筛选、转写时间戳点击跳播)。手动重建:`python3 -m deliveries.viewer` | 同 `LOCAL_ARCHIVE_DIR` |
+| `archive_git` | 每条录音后自动 commit `data/` 仓库(笔记 + manifest;音频与生成物 gitignore,由 delivery 自举写入),有 remote 时自动 push。`data/` 是嵌套仓库 —— 本项目 GitHub repo 公开,个人数据绝不进那边;它自己的 remote 必须是私有 | `data/` 需已 `git init` |
+| `r2_backup` | 归档 `.m4a` 上传到私有 Cloudflare R2 bucket(异地音频备份;≤10GB/月免费)。补传:`scripts/backfill/backfill_r2_audio.py` | 本机 `wrangler` OAuth 登录;`R2_BUCKET`(默认 `watch-transcriber-audio`) |
 | `apple_notes` | 创建 Apple 备忘录 | `APPLE_NOTES_FOLDER` |
 | `feishu` | 创建飞书文档(可选把所有权从 bot 转给你) | `FEISHU_FOLDER_TOKEN` 或 `FEISHU_WIKI_SPACE`;转移所有权需 `FEISHU_DOC_OWNER_ID` |
 | `feishu_notify` | 飞书 IM 私信通知摘要 | `FEISHU_NOTIFY_USER_ID` |
 | `obsidian_git` | 提交到 GitHub 仓库 | `OBSIDIAN_REPO`, `GITHUB_TOKEN` |
 | `agent` | 委托给 `claude -p` | `AGENT_DELIVERY_PROMPT` |
+
+**`DELIVERY_TARGETS` 顺序敏感**:`manifest` 依赖 `local_archive`/`audio_archive` 已落盘的输出,`viewer`/`archive_git` 又消费 manifest —— 保持 `local_archive, audio_archive, manifest, viewer, archive_git, r2_backup` 的相对顺序。
+
+### 数据放哪(本 repo 是公开的 ⚠️)
+
+`data/`(笔记、转写、音频、manifest)在这里被 gitignore,绝不允许 commit 进本 repo。备份三条腿:
+
+| 内容 | 位置 | 方式 |
+|---|---|---|
+| 笔记 + manifest(带版本史) | **私有** `github.com/xingfanxia/watch-transcriber-data` | `data/` 内嵌套 git 仓库;`archive_git` 每条录音自动 commit + push |
+| 音频(AI 标题拷贝) | **私有** Cloudflare R2 bucket `watch-transcriber-audio` | `r2_backup` 每条录音上传;补传 `scripts/backfill/backfill_r2_audio.py`(账本 `state/r2_uploaded.json`) |
+| 原件 | Voice Memos + iCloud | pipeline 从不触碰 |
+
+### 桌面 App(Tauri)
+
+`desktop/` 是薄壳:环回 axum 服务器伺服 `data/`(带 HTTP Range,音频可拖进度),webview 加载同一个生成的 `index.html` —— 不存在第二份 viewer 实现。`cd desktop && npm run tauri dev` 运行,`npm run tauri build` 打包;`WATCH_TRANSCRIBER_DATA` 可覆盖档案位置。
+
+- **说话人标注**(仅 app 内可编辑,走环回 API):详情页点说话人芯片给 `SPEAKER_N` 命名,可一键批量应用到当前筛选的全部录音;标注存进 `manifest.json` 的 `speakers` 字段,reprocess 不会丢,自动 commit+push 到私有笔记仓库,并驱动侧栏「说话人」筛选和转写显示。pipeline 重建档案后页面自动刷新。
+- **新机器**:clone 本仓库直接开 app —— 档案缺失时显示引导页,跑一次 `python3 scripts/ops/restore_archive.py`(克隆私有笔记仓库、从 R2 拉回全部音频、seed 上传账本、重建 viewer)后自动进入。
 
 ### Agent 投递示例
 
@@ -241,6 +267,9 @@ watch-transcriber/
 │   ├── __init__.py            # 投递路由
 │   ├── file.py                # Markdown 文件输出
 │   ├── local_archive.py       # 结构化 data/YYYY-MM-DD/ 归档（单录音 + 每日汇总 + HTML）
+│   ├── audio_archive.py       # AI 标题命名的 .m4a 拷贝，与归档笔记并排
+│   ├── manifest.py            # data/manifest.json 映射 + 分类表 + by-topic/ 视图
+│   ├── viewer.py              # data/index.html 生成器（viewer_template.html）
 │   ├── apple_notes.py         # Apple 备忘录（AppleScript）
 │   ├── feishu.py              # 飞书文档（lark-cli）
 │   ├── feishu_notify.py       # 飞书 bot 私信（附文档链接）

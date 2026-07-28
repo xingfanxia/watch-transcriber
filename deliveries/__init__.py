@@ -10,6 +10,7 @@ Where note has:
     - transcript: str (raw transcript with timestamps/speakers)
     - summary: str (AI-generated summary, may be empty)
     - todos: list[str] (extracted action items, may be empty)
+    - category: str (AI-assigned topic, one of manifest.CATEGORIES)
     - audio_path: str (path to original .m4a file)
     - timestamp: str (ISO format)
     - markdown: str (formatted markdown combining all fields)
@@ -18,6 +19,8 @@ Where note has:
 import importlib
 import os
 import re
+from datetime import datetime
+from pathlib import Path
 
 
 def safe_filename(title: str) -> str:
@@ -33,7 +36,40 @@ def safe_filename(title: str) -> str:
     return s[:80] or "note"
 
 
-BUILTIN_DELIVERIES = ["file", "local_archive", "apple_notes", "feishu", "feishu_notify", "obsidian_git", "agent"]
+def slug(s: str) -> str:
+    """Archive filename slug. Shared by every per-recording artifact — the .md
+    note, the .m4a copy, and the manifest all derive the same stem, so this
+    must stay the single implementation or the pairing silently breaks."""
+    s = re.sub(r"[^\w一-鿿 -]", "", s)
+    s = re.sub(r"\s+", "-", s.strip())
+    return s[:60] or "note"
+
+
+def archive_root() -> Path:
+    return Path(os.environ.get("LOCAL_ARCHIVE_DIR", "./data")).expanduser().resolve()
+
+
+def parse_note_dt(note: dict) -> datetime:
+    ts = note.get("timestamp")
+    if ts:
+        try:
+            return datetime.fromisoformat(ts)
+        except ValueError:
+            pass
+    return datetime.now()
+
+
+def recording_stem(note: dict) -> str:
+    """Deterministic "HHMMSS-<title-slug>" stem pairing all archive artifacts
+    of one recording. The archive filename already carries HHMMSS and the date
+    dir carries the day, so the title's leading timestamp is stripped before
+    slugging to avoid duplicating the date."""
+    dt = parse_note_dt(note)
+    display = re.sub(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}\s*", "", note["title"])
+    return f"{dt.strftime('%H%M%S')}-{slug(display or note['title'])}"
+
+
+BUILTIN_DELIVERIES = ["file", "local_archive", "audio_archive", "manifest", "viewer", "archive_git", "r2_backup", "apple_notes", "feishu", "feishu_notify", "obsidian_git", "agent"]
 
 
 def get_active_deliveries() -> list[str]:

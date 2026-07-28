@@ -37,7 +37,7 @@ def main():
         print("FEISHU_FOLDER_TOKEN not set in .env")
         return 1
 
-    rows = [json.loads(l) for l in LEDGER.read_text().splitlines() if l.strip()]
+    rows = [json.loads(ln) for ln in LEDGER.read_text().splitlines() if ln.strip()]
     docs = [(r["new_title"], r["feishu_url"].rsplit("/", 1)[-1])
             for r in rows if r.get("feishu_url")]
     print(f"{len(docs)} docs → folder {FOLDER}")

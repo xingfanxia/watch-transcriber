@@ -12,7 +12,6 @@ bound on the old docs that exist.
 
 import json
 import re
-import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
