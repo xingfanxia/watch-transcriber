@@ -118,13 +118,13 @@ Or disable "Optimize Mac Storage" in System Settings → Apple ID → iCloud.
 
 ### lark-cli appsecret missing from keychain
 
-If Feishu deliveries suddenly start failing with `keychain entry not found: lark-cli/appsecret:cli_a942426c0ab81cdd`, the macOS keychain entry for the lark-cli OAuth client got wiped (happens on keychain reset, login keychain rebuild, partial reinstall). The config file at `~/.lark-cli/config.json` still references the app, but the secret is gone, and `auth login` can't even start because device-flow OAuth needs the appsecret.
+If Feishu deliveries suddenly start failing with `keychain entry not found: lark-cli/appsecret:<YOUR_LARK_APP_ID>`, the macOS keychain entry for the lark-cli OAuth client got wiped (happens on keychain reset, login keychain rebuild, partial reinstall). The config file at `~/.lark-cli/config.json` still references the app, but the secret is gone, and `auth login` can't even start because device-flow OAuth needs the appsecret.
 
 Recovery (need the original appsecret saved somewhere — 1Password etc.):
 
 ```bash
 printf '%s' '<APPSECRET>' | lark-cli config init \
-  --app-id cli_a942426c0ab81cdd --app-secret-stdin --brand feishu
+  --app-id <YOUR_LARK_APP_ID> --app-secret-stdin --brand feishu
 lark-cli auth login --recommend --no-wait --json   # → use the verification_url
 lark-cli auth login --device-code <code>           # → blocks until approved
 lark-cli auth status                               # → should be tokenStatus: valid

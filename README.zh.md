@@ -104,13 +104,13 @@ open -g "/System/Applications/Voice Memos.app"
 
 ### lark-cli appsecret 从钥匙串消失
 
-如果飞书投递突然开始报 `keychain entry not found: lark-cli/appsecret:cli_a942426c0ab81cdd`，是 macOS 钥匙串里 lark-cli 的 OAuth 凭据被擦了（钥匙串重置、login keychain 重建、不完整重装都会触发）。`~/.lark-cli/config.json` 配置文件还在引用这个 app，但 secret 没了，连 `auth login` 都启动不了（device-flow OAuth 需要 appsecret 才能开始）。
+如果飞书投递突然开始报 `keychain entry not found: lark-cli/appsecret:<YOUR_LARK_APP_ID>`，是 macOS 钥匙串里 lark-cli 的 OAuth 凭据被擦了（钥匙串重置、login keychain 重建、不完整重装都会触发）。`~/.lark-cli/config.json` 配置文件还在引用这个 app，但 secret 没了，连 `auth login` 都启动不了（device-flow OAuth 需要 appsecret 才能开始）。
 
 恢复（需要之前保存过 appsecret，比如 1Password 里）：
 
 ```bash
 printf '%s' '<APPSECRET>' | lark-cli config init \
-  --app-id cli_a942426c0ab81cdd --app-secret-stdin --brand feishu
+  --app-id <YOUR_LARK_APP_ID> --app-secret-stdin --brand feishu
 lark-cli auth login --recommend --no-wait --json   # → 用返回的 verification_url
 lark-cli auth login --device-code <code>           # → 阻塞等待用户授权
 lark-cli auth status                               # → 应该看到 tokenStatus: valid

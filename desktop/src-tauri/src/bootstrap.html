@@ -25,7 +25,7 @@
   <h1>AX语音Vault 还没在这台机器上落地</h1>
   <p>在 watch-transcriber 仓库根目录跑一次恢复 —— 需要能访问私有 notes 仓库(gh 登录或 ssh),音频下载需要 wrangler 登录或 CF token(见 .env.example 的 CLOUDFLARE_*):</p>
   <pre>python3 scripts/ops/restore_archive.py</pre>
-  <p>它会克隆私有笔记仓库、从 R2 拉回全部音频、重建档案页面。</p>
+  <p>它会克隆私有笔记仓库、从 R2 拉回全部音频、重建档案页面。第一次使用、还没有任何档案?配好 <code>.env</code> 后直接跑 <code>python3 transcribe.py</code>,处理完第一条录音这里同样会自动进入。</p>
   <p class="pulse">恢复完成后这里会自动进入档案</p>
 </div>
 <script>

@@ -25,7 +25,10 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
-DATA_REPO = "https://github.com/xingfanxia/watch-transcriber-data.git"
+# Your PRIVATE notes repo — override in .env when you're not AX.
+DATA_REPO = os.environ.get(
+    "ARCHIVE_NOTES_REPO", "https://github.com/xingfanxia/watch-transcriber-data.git"
+)
 LEDGER = REPO_ROOT / "state" / "r2_uploaded.json"
 
 

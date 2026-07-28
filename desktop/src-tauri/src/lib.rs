@@ -277,6 +277,18 @@ fn data_dir() -> PathBuf {
     if let Ok(p) = std::env::var("WATCH_TRANSCRIBER_DATA") {
         return PathBuf::from(p);
     }
+    // Walk up from the executable looking for the repo's data/ — covers the
+    // debug/release bundle launched from inside any clone, wherever it lives.
+    if let Ok(exe) = std::env::current_exe() {
+        let mut cur = exe.as_path();
+        while let Some(parent) = cur.parent() {
+            let candidate = parent.join("data");
+            if candidate.join("manifest.json").exists() || parent.join("transcribe.py").exists() {
+                return candidate;
+            }
+            cur = parent;
+        }
+    }
     PathBuf::from(std::env::var("HOME").expect("HOME not set"))
         .join("projects/side-projects/watch-transcriber/data")
 }
