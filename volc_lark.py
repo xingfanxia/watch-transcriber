@@ -32,14 +32,20 @@ Credentials (in watch-transcriber/.env):
 import ipaddress
 import os
 import shutil
-import subprocess
-import tempfile
 import time
 import uuid
 from pathlib import Path
 from urllib.parse import urlparse
 
 import requests
+
+from audio_compaction import (
+    AudioCompactionError,
+    build_compaction_plan,
+    encode_mp3,
+    probe_duration,
+    restore_timestamp_ms,
+)
 
 # --- 妙记 API ---------------------------------------------------------------
 _SUBMIT = "https://openspeech.bytedance.com/api/v3/auc/lark/submit"
@@ -99,20 +105,74 @@ def _fmt_hms(ms) -> str:
     return f"{s // 3600:02d}:{(s % 3600) // 60:02d}:{s % 60:02d}"
 
 
-def _to_mp3(src: Path) -> Path:
-    """Downmix to 16kHz mono mp3 in a temp file. Minimises cross-border upload
-    bytes and gives 妙记 the sample rate ASR wants."""
-    tmpdir = Path(tempfile.mkdtemp(prefix="lark_"))
-    dst = tmpdir / (src.stem.replace(" ", "_") + ".mp3")
-    proc = subprocess.run(
-        ["ffmpeg", "-y", "-i", str(src), "-ac", "1", "-ar", "16000",
-         "-b:a", _MP3_BITRATE, str(dst)],
-        capture_output=True, text=True,
-    )
-    if proc.returncode != 0 or not dst.exists():
-        shutil.rmtree(tmpdir, ignore_errors=True)  # don't leak the temp dir on failure
-        raise LarkError(f"ffmpeg conversion failed for {src.name}: {proc.stderr[-400:]}")
-    return dst
+def _to_mp3(src: Path, kept_segments=None) -> Path:
+    """Downmix to 16kHz mono mp3 in a temporary file."""
+    try:
+        return encode_mp3(src, _MP3_BITRATE, kept_segments)
+    except AudioCompactionError as e:
+        raise LarkError(str(e)) from e
+
+
+def _prepare_mp3(src: Path, speech_segments=None):
+    """Build the 妙记 upload copy, compacting only Senko-confirmed long gaps.
+
+    The original recording is read-only. Any bad plan, ffmpeg failure, or
+    duration mismatch fails open to the complete recording.
+    """
+    if not speech_segments:
+        return _to_mp3(src), None
+
+    try:
+        # Safety floors are deliberate: config may make trimming more
+        # conservative, never more aggressive than the validated defaults.
+        min_silence = max(10.0, float(os.environ.get("LARK_SILENCE_MIN_SEC", "10")))
+        safety_margin = max(
+            3.0, float(os.environ.get("LARK_SILENCE_SAFETY_MARGIN_SEC", "3"))
+        )
+        original_duration = probe_duration(src)
+        plan = build_compaction_plan(
+            original_duration, speech_segments, min_silence, safety_margin
+        )
+        if plan is None:
+            return _to_mp3(src), None
+        kept, timeline = plan
+        if len(kept) > 500:
+            print(
+                f"  [妙记] WARN: {len(kept)} kept ranges is too complex; "
+                "uploading the complete recording",
+                flush=True,
+            )
+            return _to_mp3(src), None
+
+        mp3 = _to_mp3(src, kept)
+        expected_duration = timeline[-1][1]
+        actual_duration = probe_duration(mp3)
+        tolerance = max(0.5, min(2.0, expected_duration * 0.002))
+        if abs(actual_duration - expected_duration) > tolerance:
+            shutil.rmtree(mp3.parent, ignore_errors=True)
+            print(
+                "  [妙记] WARN: compacted audio duration did not match the "
+                "safe plan; uploading the complete recording",
+                flush=True,
+            )
+            return _to_mp3(src), None
+
+        removed = original_duration - expected_duration
+        print(
+            f"  [妙记] compacted long non-speech gaps: "
+            f"{_fmt_hms(original_duration * 1000)} → "
+            f"{_fmt_hms(expected_duration * 1000)} "
+            f"(saved {removed / 60:.1f} min; original untouched)",
+            flush=True,
+        )
+        return mp3, timeline
+    except (AudioCompactionError, LarkError, OSError, ValueError) as e:
+        print(
+            f"  [妙记] WARN: silence compaction skipped ({e}); "
+            "uploading the complete recording",
+            flush=True,
+        )
+        return _to_mp3(src), None
 
 
 def _tos_client():
@@ -258,30 +318,42 @@ def _submit_poll(url: str, num_speakers: int) -> list:
     return sentences
 
 
-def _format(sentences: list) -> str:
+def _format(sentences: list, timeline=None) -> str:
     """Render 妙记 sentences into the standard
-    `[HH:MM:SS - HH:MM:SS] SPEAKER_<id>: content` transcript."""
+    `[HH:MM:SS - HH:MM:SS] SPEAKER_<id>: content` transcript.
+
+    If the upload copy had long non-speech gaps compacted, map provider
+    timestamps back to the untouched original recording's timeline.
+    """
     lines = []
     for s in sentences:
         spk = (s.get("speaker") or {}).get("id", "?")
         content = (s.get("content") or "").strip()
         if not content:
             continue
+        start_ms = restore_timestamp_ms(
+            s.get("start_time"), timeline, prefer_later=True
+        )
+        end_ms = restore_timestamp_ms(
+            s.get("end_time"), timeline, prefer_later=False
+        )
         lines.append(
-            f"[{_fmt_hms(s.get('start_time'))} - {_fmt_hms(s.get('end_time'))}] "
+            f"[{_fmt_hms(start_ms)} - {_fmt_hms(end_ms)}] "
             f"SPEAKER_{spk}: {content}"
         )
     return "\n".join(lines)
 
 
-def lark_transcribe(audio_path: Path, num_speakers: int = 0) -> str:
+def lark_transcribe(
+    audio_path: Path, num_speakers: int = 0, speech_segments=None
+) -> str:
     """Transcribe + diarize one audio file via 妙记.
 
     num_speakers: 0 = let 妙记 auto-detect (best for unknown counts);
                   N = hint the expected number of speakers.
     Returns the standard speaker-labeled transcript string.
     """
-    mp3 = _to_mp3(audio_path)
+    mp3, timeline = _prepare_mp3(audio_path, speech_segments)
     client = None
     key = None
     try:
@@ -293,7 +365,7 @@ def lark_transcribe(audio_path: Path, num_speakers: int = 0) -> str:
         t0 = time.time()
         sentences = _submit_poll(url, num_speakers)
         print(f"  [妙记] done in {time.time()-t0:.0f}s ({len(sentences)} sentences)", flush=True)
-        return _format(sentences)
+        return _format(sentences, timeline)
     finally:
         # Always runs — even if _tos_client() raised (client stays None).
         if client is not None and key:
