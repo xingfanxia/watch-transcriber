@@ -106,6 +106,12 @@
   .spk-chip .sp-slot { font-family: var(--mono); font-size: 10px; color: var(--faint); }
   .spk-pop { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; background: var(--panel);
              border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin: 10px 0; }
+  .spk-quick { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .spk-quick .spk-hint { flex-basis: auto; }
+  .spk-name-pill { background: var(--panel-2); border: 1px solid var(--line); border-radius: 999px;
+                   padding: 5px 16px; font-size: 13px; color: var(--ink); }
+  .spk-name-pill:hover { border-color: var(--amber); color: var(--amber); }
+  .spk-name-pill.on { border-color: var(--amber-deep); color: var(--amber); }
   .spk-pop input { background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
                    color: var(--ink); font: 13px var(--sans); padding: 6px 10px; min-width: 200px; }
   .spk-pop input:focus { outline: none; border-color: var(--amber-deep); }
@@ -453,8 +459,20 @@ function buildTranscript(e) {
 function openSpeakerEditor(e, slot, anchor) {
   document.querySelectorAll(".spk-pop").forEach(p => p.remove());
   const pop = el("div", "spk-pop");
+  const current = (e.speakers || {})[slot];
+  const known = [...speakerNames().entries()].sort((a, b) => b[1] - a[1]);
+  if (known.length) {
+    const quick = el("div", "spk-quick");
+    quick.append(el("span", "spk-hint", "点击直接标注本条:"));
+    for (const [n] of known) {
+      const pill = el("button", "spk-name-pill" + (n === current ? " on" : ""), n);
+      pill.onclick = () => applySpeakers([e], slot, n, pop);
+      quick.append(pill);
+    }
+    pop.append(quick);
+  }
   const input = el("input");
-  input.placeholder = "输入名字,留空=清除标注";
+  input.placeholder = known.length ? "或输入新名字,留空=清除标注" : "输入名字,留空=清除标注";
   input.value = (e.speakers || {})[slot] || "";
   const dl = el("datalist"); dl.id = "spk-names";
   for (const n of speakerNames().keys()) { const o = el("option"); o.value = n; dl.append(o); }
