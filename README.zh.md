@@ -273,16 +273,21 @@ watch-transcriber/
 │   ├── audio_archive.py       # AI 标题命名的 .m4a 拷贝，与归档笔记并排
 │   ├── manifest.py            # data/manifest.json 映射 + 分类表 + by-topic/ 视图
 │   ├── viewer.py              # data/index.html 生成器（viewer_template.html）
+│   ├── archive_git.py         # 嵌套私有 data/ 仓库自动 commit+push
+│   ├── r2_backup.py           # 每条录音音频上传私有 R2 bucket
 │   ├── apple_notes.py         # Apple 备忘录（AppleScript）
 │   ├── feishu.py              # 飞书文档（lark-cli）
 │   ├── feishu_notify.py       # 飞书 bot 私信（附文档链接）
 │   ├── obsidian_git.py        # GitHub 提交到 Obsidian 仓库
 │   └── agent.py               # claude -p 委托（飞书、Slack 等）
-├── scripts/backfill/          # 一次性运维:AI 标题回填 / 重排 / 飞书旧文档清理
+├── desktop/                   # AX语音Vault —— Tauri 壳（axum 环回服务 + 管理 API）
+├── scripts/backfill/          # 幂等回填:音频拷贝 / manifest+分类 / R2 同步
+├── scripts/ops/               # apply_speakers / delete_recording / import_gpt_thread / restore_archive
+├── tests/                     # pytest 测试套件（命名、投递、manifest、viewer、删除）
 ├── setup.sh                   # 一键安装
 ├── com.watch-transcriber.plist # launchd 模板
 ├── .env.example               # 配置模板
-└── state/                     # 已处理文件记录（gitignore）
+└── state/                     # 已处理文件记录 + R2 账本（gitignore）
 ```
 
 ## 贡献

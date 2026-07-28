@@ -283,17 +283,22 @@ watch-transcriber/
 │   ├── local_archive.py       # Structured data/YYYY-MM-DD/ archive (per-recording + daily rollup + HTML)
 │   ├── audio_archive.py       # AI-titled .m4a copy alongside the archive note
 │   ├── manifest.py            # data/manifest.json map + category taxonomy + by-topic/ views
-│   ├── viewer.py              # data/index.html generator (viewer_template.html)
+│   ├── viewer.py              # data/index.html generator (viewer_template.html + vendor/marked)
+│   ├── archive_git.py         # Auto commit+push of the nested PRIVATE data/ repo
+│   ├── r2_backup.py           # Per-recording audio upload to a private R2 bucket
 │   ├── apple_notes.py         # Apple Notes via AppleScript
 │   ├── feishu.py              # Feishu/Lark doc via lark-cli
 │   ├── feishu_notify.py       # Feishu bot DM with link to created doc
 │   ├── obsidian_git.py        # GitHub commit to Obsidian vault
 │   └── agent.py               # claude -p delegation (Feishu, Slack, etc.)
-├── scripts/backfill/          # One-off ops: AI-title backfill / retitle / Feishu doc cleanup
+├── desktop/                   # AX语音Vault — Tauri shell (axum loopback server + manager APIs)
+├── scripts/backfill/          # Idempotent backfills: audio copies / manifest+categories / R2 sync
+├── scripts/ops/               # apply_speakers / delete_recording / import_gpt_thread / restore_archive
+├── tests/                     # pytest suite (naming, deliveries, manifest, viewer, delete)
 ├── setup.sh                   # One-command install
 ├── com.watch-transcriber.plist # launchd template
 ├── .env.example               # Configuration template
-└── state/                     # Processed files tracking (gitignored)
+└── state/                     # Processed files tracking + R2 ledger (gitignored)
 ```
 
 ## Contributing
