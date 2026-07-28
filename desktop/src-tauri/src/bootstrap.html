@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>语音档案 · 初始化</title>
+<style>
+  :root { --bg:#1a1a1a; --panel:#232323; --line:#343434; --ink:#ececec; --dim:#a0a0a0; --accent:#6cb0f5; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:var(--bg); color:var(--ink); height:100vh; display:grid; place-items:center;
+         font-family:"PingFang SC",-apple-system,sans-serif; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:16px;
+          padding:36px 40px; max-width:560px; }
+  h1 { font-size:19px; margin-bottom:14px; }
+  p { color:var(--dim); font-size:13.5px; line-height:1.7; margin:8px 0; }
+  pre { background:var(--bg); border:1px solid var(--line); border-radius:10px; padding:12px 16px;
+        margin:14px 0; font:12.5px ui-monospace,Menlo,monospace; color:var(--accent); overflow-x:auto; }
+  .pulse { color:var(--dim); font-size:12px; margin-top:18px; }
+  .pulse::before { content:"● "; color:var(--accent); animation:blink 1.6s infinite; }
+  @keyframes blink { 50% { opacity:.25; } }
+  @media (prefers-reduced-motion: reduce) { .pulse::before { animation:none; } }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>语音档案还没在这台机器上落地</h1>
+  <p>在 watch-transcriber 仓库根目录跑一次恢复 —— 需要能访问私有 notes 仓库(gh 登录或 ssh),音频下载需要 wrangler 登录或 CF token(见 .env.example 的 CLOUDFLARE_*):</p>
+  <pre>python3 scripts/ops/restore_archive.py</pre>
+  <p>它会克隆私有笔记仓库、从 R2 拉回全部音频、重建档案页面。</p>
+  <p class="pulse">恢复完成后这里会自动进入档案</p>
+</div>
+<script>
+setInterval(() =>
+  fetch("/index.html", { method: "HEAD", cache: "no-store" })
+    .then(r => { if (r.ok) location = "/index.html"; })
+    .catch(() => {}), 4000);
+</script>
+</body>
+</html>
