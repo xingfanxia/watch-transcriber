@@ -49,6 +49,10 @@ venv/bin/python3 transcribe.py --doctor   # config/env sanity
 (template-only changes don't trigger the page's auto-refresh, which watches
 `manifest.json`).
 
+README screenshots (`docs/screenshots/`) come from a fabricated demo archive —
+regenerate with `scripts/demo/make_demo_data.py` + `shoot_screenshots.py`
+(usage in the latter's docstring). Never screenshot real `data/`.
+
 ## Releasing the app
 
 Push a `v*` tag → `.github/workflows/release.yml` builds the universal dmg
