@@ -72,6 +72,17 @@
   .row .ti { font-family: var(--serif); font-size: 15px; font-weight: 700; flex: 1;
              overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .row.on .ti { color: var(--ink); }
+  .avatar { display: inline-grid; place-items: center; width: 19px; height: 19px;
+            border-radius: 50%; border: 1px solid; font-size: 9.5px; font-weight: 600;
+            flex: none; box-sizing: border-box; }
+  .avatar.unk { color: var(--faint); background: none; border: 1px dashed var(--faint); }
+  .facepile { display: inline-flex; flex: none; }
+  .facepile .avatar { margin-left: -7px; box-shadow: 0 0 0 2px var(--bg); transition: margin-left .15s ease; }
+  .facepile .avatar:first-child { margin-left: 0; }
+  .row:hover .facepile .avatar, .row.on .facepile .avatar { margin-left: 2px; }
+  .row:hover .facepile .avatar:first-child, .row.on .facepile .avatar:first-child { margin-left: 0; }
+  .cat-l { display: inline-flex; align-items: center; gap: 8px; }
+  .cat.spk { padding-top: 5px; padding-bottom: 5px; }
   .row .dur { font-size: 11.5px; flex: none; }
   .row .dur.short { color: var(--faint); }
   .row .dur.mid { color: var(--dim); }
@@ -234,11 +245,32 @@ const slotsOf = e => [...new Set([
   ...Object.keys(e.speakers || {}),
 ])];
 /* Deterministic per-name color so 妍子/AX look the same in every recording. */
-const spkColor = name => {
+const spkColor = (name, alpha) => {
   let h = 0;
   for (const c of String(name)) h = (h * 31 + c.codePointAt(0)) % 360;
   const light = matchMedia("(prefers-color-scheme: light)").matches;
-  return `hsl(${h}, 55%, ${light ? 40 : 68}%)`;
+  return `hsl(${h} 55% ${light ? 40 : 68}%${alpha ? " / " + alpha : ""})`;
+};
+const avatarEl = name => {
+  const a = el("span", "avatar", String(name).slice(0, 1).toUpperCase());
+  a.style.color = spkColor(name);
+  a.style.background = spkColor(name, ".16");
+  a.style.borderColor = spkColor(name, ".5");
+  a.title = name;
+  return a;
+};
+const facepileEl = e => {
+  const names = [...new Set(Object.values(e.speakers || {}))];
+  const untagged = slotsOf(e).filter(s => !(e.speakers || {})[s]).length;
+  if (!names.length && !untagged) return null;
+  const pile = el("span", "facepile");
+  names.forEach(n => pile.append(avatarEl(n)));
+  if (untagged) {
+    const q = el("span", "avatar unk", "?");
+    q.title = `${untagged} 个说话人未标注`;
+    pile.append(q);
+  }
+  return pile;
 };
 const speakerNames = () => {
   const names = new Map();
@@ -268,8 +300,10 @@ function renderSide() {
   if (names.size) {
     cats.append(el("div", "side-sec", "说话人"));
     const mkSpk = (label, key, count) => {
-      const b = el("button", "cat" + ((state.spk ?? null) === key ? " on" : ""));
-      b.append(el("span", null, label), el("span", "n", String(count)));
+      const b = el("button", "cat spk" + ((state.spk ?? null) === key ? " on" : ""));
+      const left = el("span", "cat-l");
+      left.append(avatarEl(label), el("span", null, label));
+      b.append(left, el("span", "n", String(count)));
       b.onclick = () => { state.spk = state.spk === key ? null : key; renderSide(); renderList(); };
       cats.append(b);
     };
@@ -314,6 +348,8 @@ function renderList() {
     row.dataset.key = e.key;
     const top = el("div", "row-top");
     top.append(el("span", "t", e.time), el("span", "ti", e.ai_title));
+    const pile = facepileEl(e);
+    if (pile) top.append(pile);
     if (e.audio) {
       const dur = el("span", "dur " + durClass(e.duration || 0), fmtDurCN(e.duration));
       dur.title = fmtDur(e.duration);
