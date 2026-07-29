@@ -170,7 +170,7 @@ placeholder `usesCleartextTraffic` **false for release** (true only in debug)
 — a release APK will refuse the loopback HTTP URL and white-screen. MOBILE-4
 must flip it (or ship a network-security-config allowing 127.0.0.1 only).
 
-### MOBILE-3 (2026-07-28, in progress)
+### MOBILE-3 (2026-07-28, DONE — verified iPhone 17 Pro sim + Pixel 8 emulator)
 
 Implemented 时间流 (variant A, AX's taste-fork pick) as a mobile layer in the
 shared `viewer_template.html`: ≤719px breakpoint — full-screen list (brand +
@@ -195,7 +195,9 @@ iOS data path is `<container>/Library/Application Support/<bundle-id>/data`.
 **Emulator quirks:** this AVD needs `-gpu swiftshader_indirect` (hardware GPU
 run showed chromium "tile memory limits exceeded" and a pure-white webview);
 default snapshot restore can resurface another project's session — cold-boot
-and reinstall before judging anything. Tauri injects its init scripts twice on
+and reinstall before judging anything. The display pipeline can also die
+mid-session (screencap turns pure black even on the LAUNCHER) — check a
+known-good screen's brightness before blaming the app; cold restart fixes it. Tauri injects its init scripts twice on
 Android ("Cannot redefine property" console errors) — benign for the viewer,
 keep an eye on it.
 
