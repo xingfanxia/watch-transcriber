@@ -41,6 +41,37 @@ Or skip the build: download the latest `EchoWall_*_universal.dmg` (Apple Silicon
 
 > Release builds are **Developer ID signed and notarized by Apple** — download, open, done.
 
+## Mobile
+
+EchoWall also runs on **iOS and Android** (same Tauri shell, same generated viewer) as a **read-only companion**: it pulls your archive straight from your own backups — the private notes repo as a GitHub tarball, audio streamed on demand from your R2 bucket — so the phone needs no always-on server and nothing new to host. Editing (speakers, attachments, delete) stays on desktop.
+
+| 时间流 list + sync pill | Detail: tabs, player, offline pin | First-run token setup | Manual light/dark |
+|---|---|---|---|
+| ![Mobile list: day-grouped recordings with sync status pill](docs/screenshots/05-mobile-list.png) | ![Mobile detail: summary tab with bottom player and pin button](docs/screenshots/06-mobile-detail.png) | ![Token setup page with GitHub and R2 credential fields](docs/screenshots/07-mobile-setup.png) | ![Mobile list in light theme](docs/screenshots/08-mobile-light.png) |
+
+*Screenshots show fabricated demo data.*
+
+- **Direct-pull sync** — on launch (and on tap of the sync pill) the app downloads the notes repo tarball and overlays it into the app sandbox; the built viewer page ships inside that repo, so mobile always renders exactly what desktop built. Sync states: 同步中 / ✓ 已同步 / 同步失败 / 离线 / token 已过期.
+- **Audio: stream + cache + pin** — playback streams from R2 with HTTP Range (seek works), a 500MB LRU disk cache makes replays local, and the ↓ button on the player pins a recording's audio for offline. Offline: notes are always available, pinned audio plays, unpinned shows 离线未缓存.
+- **Tokens live in the platform secure store** — iOS Keychain / Android Keystore, never in a file, never in this repo.
+
+**Token setup** (first run asks for two read-only credentials):
+
+1. **GitHub fine-grained PAT** — github.com → Settings → Developer settings → Fine-grained tokens: Repository access = only your private notes repo, Permissions = Contents: Read-only. Max expiry is 1 year — calendar the rotation.
+2. **R2 API token** — Cloudflare dashboard → R2 → Manage API Tokens → Create: Permission = Object Read only, scope = your audio bucket. The dashboard shows the **Access Key ID** and **Secret Access Key**; your **Account ID** is on the R2 overview page.
+
+**Install**: iOS via TestFlight (invite-based while the app record is pending) · Android via the signed `EchoWall_*_universal.apk` on [GitHub Releases](https://github.com/xingfanxia/watch-transcriber/releases) (sideload; built and signed by the same CI as the dmg).
+
+Build from source (needs Xcode / Android SDK+NDK):
+
+```bash
+cd desktop
+npm run tauri ios dev      # iOS simulator (boot it first)
+npm run tauri android dev  # Android emulator
+npm run tauri ios build -- --export-method app-store-connect   # App Store ipa
+npm run tauri android build -- --apk                           # signed APK (keystore.properties)
+```
+
 ## Why This Approach
 
 We researched and rejected several alternatives before landing on this design. Here's what we learned.
