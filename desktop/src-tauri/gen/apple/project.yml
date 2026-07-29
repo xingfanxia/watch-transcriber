@@ -45,6 +45,8 @@ targets:
       path: desktop_iOS/Info.plist
       properties:
         LSRequiresIPhoneOS: true
+        # Only exempt encryption: standard TLS (rustls) + platform keychain.
+        ITSAppUsesNonExemptEncryption: false
         UILaunchStoryboardName: LaunchScreen
         UIRequiredDeviceCapabilities: [arm64, metal]
         UISupportedInterfaceOrientations:
