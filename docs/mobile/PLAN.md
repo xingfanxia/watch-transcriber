@@ -170,6 +170,28 @@ placeholder `usesCleartextTraffic` **false for release** (true only in debug)
 — a release APK will refuse the loopback HTTP URL and white-screen. MOBILE-4
 must flip it (or ship a network-security-config allowing 127.0.0.1 only).
 
+### MOBILE-3 (2026-07-28, in progress)
+
+Implemented 时间流 (variant A, AX's taste-fork pick) as a mobile layer in the
+shared `viewer_template.html`: ≤719px breakpoint — full-screen list (brand +
+search + horizontal filter chips), detail as a pushed screen (返回 button,
+left-edge swipe, system back via pushState/popstate), bottom-docked player
+(44pt), mini-player bar over the list while audio plays; manual light/dark
+toggle on both desktop and mobile (`data-theme` on `<html>` +
+localStorage(`echowall-theme`), beats the system media query both ways —
+speaker hues re-render on change). Desktop 1440px verified pixel-unchanged;
+22 tests + ruff green.
+
+**Root cause of the day — `WebviewWindowBuilder.inner_size(1360, 900)` leaks
+into the MOBILE webview's CSS viewport** (WKWebView renders ~1360px wide,
+media queries never match, phone shows the desktop grid even though the
+viewport meta is correct). Fix: `#[cfg(not(mobile))]` on
+`inner_size`/`min_inner_size`. Also: WKWebView caches served pages hard —
+after template changes, uninstall/reinstall (or bump) before judging; the
+iOS app container UUID rotates on reinstall (re-resolve via
+`simctl get_app_container` every time); with the mobile data-dir patch the
+iOS data path is `<container>/Library/Application Support/<bundle-id>/data`.
+
 **Emulator quirks:** this AVD needs `-gpu swiftshader_indirect` (hardware GPU
 run showed chromium "tile memory limits exceeded" and a pure-white webview);
 default snapshot restore can resurface another project's session — cold-boot

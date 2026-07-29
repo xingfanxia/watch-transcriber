@@ -338,11 +338,14 @@ pub fn run() {
 
             let page = if ready { "index.html" } else { "bootstrap" };
             let url = format!("http://127.0.0.1:{port}/{page}");
-            WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url.parse()?))
-                .title("回音壁 EchoWall")
-                .inner_size(1360.0, 900.0)
-                .min_inner_size(800.0, 600.0)
-                .build()?;
+            let win = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url.parse()?))
+                .title("回音壁 EchoWall");
+            // Desktop-only sizing: on iOS/Android these leak into the webview's
+            // logical viewport (CSS sees ~1360px → phone renders the desktop
+            // layout); mobile must take the native screen size.
+            #[cfg(not(mobile))]
+            let win = win.inner_size(1360.0, 900.0).min_inner_size(800.0, 600.0);
+            win.build()?;
             Ok(())
         })
         .run(tauri::generate_context!())
