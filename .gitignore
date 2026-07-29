@@ -13,3 +13,5 @@ cclogs/
 # backfill run artifacts (personal titles + doc tokens)
 scripts/backfill/backfill_ledger.jsonl
 scripts/backfill/*_manifest.json
+desktop/src-tauri/.cargo/
+.cargo/
