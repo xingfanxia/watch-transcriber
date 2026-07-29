@@ -1,9 +1,12 @@
 name: release
 
-# Tag `v*` → build the universal macOS bundle of 回音壁 EchoWall, Developer ID
-# sign + notarize it (secrets: APPLE_CERTIFICATE(_PASSWORD), APPLE_SIGNING_IDENTITY,
-# APPLE_API_ISSUER/KEY_ID/KEY_CONTENT — local kit in ~/creds/apple/, see its
-# README), and attach the dmg to a GitHub Release.
+# Tag `v*` → three lanes (local kit in ~/creds/apple + ~/creds/android, see
+# ~/creds/README.md):
+#   macos   — universal dmg, Developer ID signed + notarized, → GitHub Release
+#   ios     — App Store ipa (Apple Distribution + "EchoWall App Store"
+#             profile, both minted via the ASC API), uploaded to TestFlight
+#             when the ASC app record exists (skips cleanly until then)
+#   android — signed universal-release APK (upload keystore) → GitHub Release
 
 on:
   push:
@@ -73,3 +76,178 @@ jobs:
         with:
           name: ${{ steps.artifact.outputs.name }}
           path: ${{ steps.artifact.outputs.path }}
+
+  ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+
+      - name: npm install
+        working-directory: desktop
+        run: npm install
+
+      - name: Import distribution cert + provisioning profile
+        env:
+          APPLE_DIST_CERTIFICATE: ${{ secrets.APPLE_DIST_CERTIFICATE }}
+          APPLE_DIST_CERT_PASSWORD: ${{ secrets.APPLE_DIST_CERT_PASSWORD }}
+          APPLE_PROVISIONING_PROFILE: ${{ secrets.APPLE_PROVISIONING_PROFILE }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/build.keychain-db"
+          security create-keychain -p ci "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p ci "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
+          printf '%s' "$APPLE_DIST_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/dist.p12"
+          security import "$RUNNER_TEMP/dist.p12" -k "$KEYCHAIN" \
+            -P "$APPLE_DIST_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -k ci "$KEYCHAIN"
+          PROFILES="$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"
+          mkdir -p "$PROFILES" "$HOME/Library/MobileDevice/Provisioning Profiles"
+          printf '%s' "$APPLE_PROVISIONING_PROFILE" | base64 --decode > "$RUNNER_TEMP/echowall.mobileprovision"
+          UUID=$(security cms -D -i "$RUNNER_TEMP/echowall.mobileprovision" | plutil -extract UUID raw -)
+          cp "$RUNNER_TEMP/echowall.mobileprovision" "$PROFILES/$UUID.mobileprovision"
+          cp "$RUNNER_TEMP/echowall.mobileprovision" "$HOME/Library/MobileDevice/Provisioning Profiles/$UUID.mobileprovision"
+
+      - name: Build App Store ipa
+        working-directory: desktop
+        run: |
+          # tauri's own export step generates a minimal ExportOptions without
+          # the manual-signing profile map and fails; the archive it produced
+          # is fine, so fall back to exporting that archive ourselves.
+          if ! npm run tauri ios build -- --export-method app-store-connect --ci; then
+            test -d src-tauri/gen/apple/build/desktop_iOS.xcarchive
+            cat > "$RUNNER_TEMP/ExportOptions.plist" <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>method</key><string>app-store-connect</string>
+              <key>signingStyle</key><string>manual</string>
+              <key>teamID</key><string>2T5DG4GZBN</string>
+              <key>signingCertificate</key><string>Apple Distribution</string>
+              <key>provisioningProfiles</key>
+              <dict>
+                  <key>ai.ax.watch-transcriber</key><string>EchoWall App Store</string>
+              </dict>
+          </dict>
+          </plist>
+          PLIST
+            xcodebuild -exportArchive \
+              -archivePath src-tauri/gen/apple/build/desktop_iOS.xcarchive \
+              -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+              -exportPath src-tauri/gen/apple/build/ipa
+          fi
+
+      - name: Locate ipa
+        id: ipa
+        run: |
+          IPA=$(find desktop/src-tauri/gen/apple/build -name "*.ipa" | head -1)
+          test -n "$IPA"
+          echo "path=$IPA" >> "$GITHUB_OUTPUT"
+
+      - name: Upload to TestFlight (skips until the ASC app record exists)
+        env:
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          mkdir -p "$HOME/.appstoreconnect/private_keys"
+          printf '%s' "$APPLE_API_KEY_CONTENT" > "$HOME/.appstoreconnect/private_keys/AuthKey_$APPLE_API_KEY_ID.p8"
+          if xcrun altool --list-apps --apiKey "$APPLE_API_KEY_ID" --apiIssuer "$APPLE_API_ISSUER" 2>/dev/null \
+              | grep -q "ai.ax.watch-transcriber"; then
+            xcrun altool --upload-app -f "${{ steps.ipa.outputs.path }}" -t ios \
+              --apiKey "$APPLE_API_KEY_ID" --apiIssuer "$APPLE_API_ISSUER"
+          else
+            echo "::warning::No ASC app record for ai.ax.watch-transcriber yet — create it in App Store Connect (New App → bundle id ai.ax.watch-transcriber), then re-run. Skipping upload."
+          fi
+
+      - name: Upload ipa as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: EchoWall-ipa
+          path: ${{ steps.ipa.outputs.path }}
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install NDK
+        run: sdkmanager "ndk;27.2.12479018"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+
+      - name: npm install
+        working-directory: desktop
+        run: npm install
+
+      - name: Write keystore
+        env:
+          ANDROID_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
+        run: printf '%s' "$ANDROID_KEYSTORE" | base64 --decode > "$RUNNER_TEMP/upload.jks"
+
+      - name: Build signed universal APK
+        working-directory: desktop
+        env:
+          NDK_HOME: ${{ env.ANDROID_SDK_ROOT }}/ndk/27.2.12479018
+          ANDROID_NDK_HOME: ${{ env.ANDROID_SDK_ROOT }}/ndk/27.2.12479018
+          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/upload.jks
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: echowall
+        run: npm run tauri android build -- --apk --ci
+
+      - name: Locate + rename APK
+        id: apk
+        run: |
+          APK=$(find desktop/src-tauri/gen/android/app/build/outputs/apk -name "*universal-release*.apk" | head -1)
+          test -n "$APK"
+          VER=$(node -p "require('./desktop/src-tauri/tauri.conf.json').version")
+          OUT="EchoWall_${VER}_universal.apk"
+          cp "$APK" "$OUT"
+          echo "path=$OUT" >> "$GITHUB_OUTPUT"
+          echo "name=$OUT" >> "$GITHUB_OUTPUT"
+
+      - name: Upload to release (tag builds only)
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "$GITHUB_REF_NAME" "${{ steps.apk.outputs.path }}" --clobber ||
+          gh release create "$GITHUB_REF_NAME" "${{ steps.apk.outputs.path }}" \
+            --title "回音壁 EchoWall $GITHUB_REF_NAME" --generate-notes
+
+      - name: Upload workflow artifact (dispatch builds)
+        if: "!startsWith(github.ref, 'refs/tags/')"
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.apk.outputs.name }}
+          path: ${{ steps.apk.outputs.path }}

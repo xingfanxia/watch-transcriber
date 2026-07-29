@@ -17,7 +17,7 @@ must be empty) before any push.
 ```bash
 venv/bin/python3 -m pytest tests/ -q      # 22 tests
 ruff check deliveries/ scripts/ tests/ transcribe.py
-cd desktop/src-tauri && cargo check       # Rust shell
+cd desktop/src-tauri && cargo check && cargo test   # Rust shell + sync-core tests
 venv/bin/python3 transcribe.py --doctor   # config/env sanity
 ```
 
@@ -50,14 +50,48 @@ venv/bin/python3 transcribe.py --doctor   # config/env sanity
 `manifest.json`).
 
 README screenshots (`docs/screenshots/`) come from a fabricated demo archive —
-regenerate with `scripts/demo/make_demo_data.py` + `shoot_screenshots.py`
+regenerate with `scripts/demo/make_demo_data.py <dest>` + `shoot_screenshots.py`
 (usage in the latter's docstring). Never screenshot real `data/`.
+
+## Mobile (iOS / Android)
+
+Same crate, `#[cfg(mobile)]` paths: read-only viewer + direct-pull sync
+(`src/sync.rs` tarball pull, `src/r2.rs` SigV4 streaming + LRU cache,
+`src/secrets.rs` Keychain/Keystore tokens, `src/setup.html` first-run).
+Mobile landing URL is `/index.html?m=1` — that param IS the read-only/sync-UI
+switch in the viewer template. Dev: `npm run tauri ios dev` (boot the sim
+first) / `npm run tauri android dev`. Landmines, all learned the hard way
+(details in `docs/mobile/PLAN.md` Retro + Autonomous decisions):
+
+- **Every HTTP call goes through `r2::http()`** — a bare
+  `reqwest::Client::new()` panics on Android (rustls-platform-verifier needs
+  JNI init we deliberately don't do; the shared client uses webpki roots).
+- **`gen/android/.../io/crates/keyring/Keyring.kt` is hand-added** and its
+  `initializeNdkContext` call in `MainActivity.onCreate` must stay BEFORE
+  `super.onCreate()` — without it the Keystore store panics at startup.
+  Proguard keeps for that class live in `app/proguard-rules.pro`.
+- **Android release keeps `usesCleartextTraffic=true`** (loopback-only
+  serving; flipping it back white-screens release builds).
+- **`WebviewWindowBuilder.inner_size` stays `#[cfg(not(mobile))]`** — on
+  mobile it leaks into the CSS viewport and the phone renders desktop layout.
+- **The private data repo commits built `index.html` + `marked.min.js`** —
+  mobile serves the page from the tarball; never re-implement the viewer
+  builder in Rust.
+- `gen/apple/ExportOptions.plist` must keep the manual-signing profile map;
+  tauri's own export step writes one without it and fails.
+- `tauri android dev` redeploys can leave the OLD process running on the old
+  port — `adb shell pidof` + `am force-stop` before judging a change.
 
 ## Releasing the app
 
-Push a `v*` tag → `.github/workflows/release.yml` builds the universal dmg,
-**Developer ID signs + notarizes** it (repo Actions secrets `APPLE_*`; the
-local signing kit and its docs live in `~/creds/apple/` — see the README
-there), and uploads to the GitHub Release (idempotent `--clobber`). Bump
-`desktop/src-tauri/tauri.conf.json` `version` before tagging. Local signed
-build: same `APPLE_*` env vars on `npm run tauri build`.
+Push a `v*` tag → `.github/workflows/release.yml` runs three lanes:
+macOS universal dmg (**Developer ID signed + notarized**) → Release; iOS App
+Store ipa (Apple Distribution + "EchoWall App Store" profile) → TestFlight
+upload that skips cleanly until the ASC app record exists; Android signed
+universal APK → Release. Secrets: `APPLE_*`, `APPLE_DIST_*`,
+`APPLE_PROVISIONING_PROFILE`, `ANDROID_KEYSTORE(_PASSWORD)`; local kits in
+`~/creds/apple/` + `~/creds/android/` (see `~/creds/README.md`). Version bump
+before tagging touches THREE spots: `tauri.conf.json` `version`,
+`gen/apple/desktop_iOS/Info.plist`, `gen/apple/project.yml` (Android reads
+tauri.properties at build). Local signed build: same `APPLE_*` env vars on
+`npm run tauri build`.

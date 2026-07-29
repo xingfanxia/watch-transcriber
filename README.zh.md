@@ -41,6 +41,37 @@ npm run tauri build    # 打包独立的 EchoWall.app / .dmg
 
 > Release 构建带 **Developer ID 签名并通过 Apple 公证** —— 下载即开，无任何 Gatekeeper 阻拦。
 
+## 移动端
+
+回音壁同样跑在 **iOS 和 Android** 上(同一个 Tauri 壳、同一份生成页面),定位是**只读伴侣**:直接从你自己的备份拉档案 —— 私有笔记仓库以 GitHub tarball 拉取,音频从你的 R2 bucket 按需流式播放 —— 手机端不需要任何常驻服务器。编辑(说话人、附注、删除)留在桌面端。
+
+| 时间流列表 + 同步状态 | 详情:tab、播放器、离线 pin | 首次运行 token 配置 | 手动深浅色切换 |
+|---|---|---|---|
+| ![移动端列表:按日分组与同步状态胶囊](docs/screenshots/05-mobile-list.png) | ![移动端详情:摘要 tab、底部播放器与 pin 按钮](docs/screenshots/06-mobile-detail.png) | ![token 配置页:GitHub 与 R2 凭据](docs/screenshots/07-mobile-setup.png) | ![浅色主题下的移动端列表](docs/screenshots/08-mobile-light.png) |
+
+*截图均为虚构演示数据。*
+
+- **直拉同步** —— 启动时(以及点同步胶囊时)下载笔记仓库 tarball 覆盖进 app 沙盒;构建好的档案页面就在仓库里,移动端渲染的永远是桌面端构建的那一份。同步状态:同步中 / ✓ 已同步 / 同步失败 / 离线 / token 已过期。
+- **音频:流式 + 缓存 + pin** —— 播放走 R2 的 HTTP Range(可拖进度),500MB LRU 磁盘缓存让重播走本地,播放器上的 ↓ 把单条录音固定到离线。离线时:笔记永远可看,已 pin 的音频照常播,未缓存的显示 离线未缓存。
+- **token 存平台安全存储** —— iOS Keychain / Android Keystore,不落明文文件,更不进这个仓库。
+
+**token 配置**(首次运行需要两份只读凭据):
+
+1. **GitHub fine-grained PAT** —— github.com → Settings → Developer settings → Fine-grained tokens:仓库范围只选私有笔记仓库,权限只给 Contents: Read-only。最长有效期 1 年,记得设个轮换提醒。
+2. **R2 API token** —— Cloudflare 控制台 → R2 → Manage API Tokens → Create:权限选 Object Read only,范围限定音频 bucket。创建后页面直接给出 **Access Key ID** 和 **Secret Access Key**;**Account ID** 在 R2 概览页。
+
+**安装**:iOS 走 TestFlight(app record 建好前为邀请制)· Android 从 [GitHub Releases](https://github.com/xingfanxia/watch-transcriber/releases) 下载签名的 `EchoWall_*_universal.apk` 侧载(与 dmg 同一条 CI 构建签名)。
+
+从源码构建(需要 Xcode / Android SDK+NDK):
+
+```bash
+cd desktop
+npm run tauri ios dev      # iOS 模拟器(先手动 boot)
+npm run tauri android dev  # Android 模拟器
+npm run tauri ios build -- --export-method app-store-connect   # App Store ipa
+npm run tauri android build -- --apk                           # 签名 APK(keystore.properties)
+```
+
 ## 为什么选这个方案
 
 我们调研并否定了多个方案，最终选定这条路径。以下是我们的发现。

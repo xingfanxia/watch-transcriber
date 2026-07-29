@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>回音壁 EchoWall</title>
 <style>
   :root {
@@ -16,12 +16,19 @@
     --sans: "PingFang SC", -apple-system, "Helvetica Neue", sans-serif;
     --mono: ui-monospace, "SF Mono", Menlo, monospace;
   }
+  /* Manual theme override (data-theme on <html>, persisted) beats the system
+     preference in both directions; without it the media query decides. */
   @media (prefers-color-scheme: light) {
-    :root {
+    :root:not([data-theme="dark"]) {
       --bg: #ffffff; --panel: #f7f7f7; --panel-2: #ececec; --line: #e2e2e2;
       --ink: #242424; --dim: #6e6e6e; --faint: #9a9a9a; --tick: #cfcfcf;
       --amber: #2f7fd6; --amber-deep: #559ce3; --glow: rgba(47,127,214,.12);
     }
+  }
+  :root[data-theme="light"] {
+    --bg: #ffffff; --panel: #f7f7f7; --panel-2: #ececec; --line: #e2e2e2;
+    --ink: #242424; --dim: #6e6e6e; --faint: #9a9a9a; --tick: #cfcfcf;
+    --amber: #2f7fd6; --amber-deep: #559ce3; --glow: rgba(47,127,214,.12);
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { height: 100%; }
@@ -185,17 +192,102 @@
   .tr button.ts:hover { color: var(--amber); background: var(--glow); }
   .tr .sp { color: var(--amber-deep); } /* fallback; per-name color set inline */
   .tr .tx { color: var(--ink); }
-  @media (prefers-color-scheme: light) { .player { box-shadow: 0 4px 14px rgba(90,70,30,.12); } }
+  @media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) .player { box-shadow: 0 4px 14px rgba(90,70,30,.12); } }
+  :root[data-theme="light"] .player { box-shadow: 0 4px 14px rgba(90,70,30,.12); }
 
-  @media (max-width: 900px) {
+  .brand { position: relative; }
+  .theme-btn { position: absolute; right: 0; top: 0; width: 34px; height: 34px;
+               border: 1px solid var(--line); border-radius: 50%; color: var(--dim);
+               font-size: 14px; display: grid; place-items: center; }
+  .theme-btn:hover { color: var(--amber); border-color: var(--amber-deep); }
+
+  /* Mobile sync surface: status pill under the brand, offline-pin button in
+     the player, transient toast. Hidden unless the app reveals them (?m=1). */
+  #syncPill { display: block; margin: 10px 0 -2px; width: max-content; max-width: 100%;
+              font-family: var(--mono); font-size: 11px; color: var(--faint);
+              border: 1px solid var(--line); border-radius: 999px; padding: 5px 12px;
+              white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+  #syncPill[hidden] { display: none; }
+  #syncPill.busy { color: var(--amber); border-color: var(--amber-deep); }
+  #syncPill.err { color: #e07070; border-color: #e0707055; }
+  .pin-btn { min-width: 34px; height: 34px; border: 1px solid var(--line); border-radius: 50%;
+             color: var(--dim); font-size: 13px; display: grid; place-items: center; }
+  .pin-btn.on { color: var(--amber); border-color: var(--amber-deep); }
+  #toast { position: fixed; left: 50%; transform: translateX(-50%);
+           bottom: calc(88px + env(safe-area-inset-bottom)); z-index: 40;
+           background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+           color: var(--ink); font-size: 12.5px; padding: 9px 14px; opacity: 0;
+           pointer-events: none; transition: opacity .25s; box-shadow: 0 8px 24px rgba(0,0,0,.4); }
+  #toast.show { opacity: 1; }
+
+  /* Mobile back affordance + mini player exist in the DOM at every width but
+     only the phone breakpoint reveals them. */
+  .m-back { display: none; align-items: center; color: var(--amber); font-size: 15px;
+            padding: 10px 14px 10px 0; margin: -6px 0 2px; }
+  #mini { display: none; position: fixed; left: 10px; right: 10px;
+          bottom: calc(12px + env(safe-area-inset-bottom)); z-index: 20;
+          background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+          align-items: center; gap: 11px; padding: 9px 12px 11px;
+          box-shadow: 0 10px 30px rgba(0,0,0,.45); cursor: pointer; }
+  #mini .mtw { flex: 1; min-width: 0; }
+  #mini .mt { font-size: 13px; font-weight: 600; overflow: hidden;
+              text-overflow: ellipsis; white-space: nowrap; }
+  #mini .mp { font-family: var(--mono); font-size: 10.5px; color: var(--faint); }
+  #mini .mbar { position: absolute; left: 12px; right: 12px; bottom: 4px; height: 2px;
+                background: var(--panel-2); border-radius: 1px; }
+  #mini .mbar b { display: block; height: 2px; width: 0; background: var(--amber); border-radius: 1px; }
+  #mini .play-btn { width: 36px; height: 36px; font-size: 12px; }
+
+  @media (min-width: 720px) and (max-width: 900px) {
     body { overflow: auto; }
     .app { display: block; height: auto; }
     .side { border-right: none; border-bottom: 1px solid var(--line); }
     .stats { margin-top: 8px; }
     .list { border-right: none; max-height: 45vh; }
   }
+
+  /* ---------- phone layout (时间流): full-screen list, pushed detail ---------- */
+  @media (max-width: 719px) {
+    .app { display: flex; flex-direction: column; height: 100%; }
+    .side { border-right: none; border-bottom: 1px solid var(--line); flex: none;
+            padding: calc(14px + env(safe-area-inset-top)) 16px 0; gap: 10px; overflow: visible; }
+    .brand h1 { font-size: 21px; }
+    .cats { flex-direction: row; overflow-x: auto; gap: 8px;
+            margin: 0 -16px; padding: 2px 16px 12px; scrollbar-width: none; }
+    .cats::-webkit-scrollbar { display: none; }
+    .cat { flex: none; display: inline-flex; align-items: center; gap: 6px; min-height: 36px;
+           border: 1px solid var(--line); border-radius: 999px; padding: 6px 14px; }
+    .cat.on { border-color: var(--amber-deep); background: var(--glow); color: var(--amber); }
+    .side-sec { display: none; }
+    .stats { display: none; }
+    .list { flex: 1; border-right: none;
+            padding-bottom: calc(76px + env(safe-area-inset-bottom)); }
+    .row { padding: 13px 16px; }
+    .day { padding: 14px 16px 8px; }
+    .empty { padding: 40px 20px; }
+
+    .detail { position: fixed; inset: 0; background: var(--bg); z-index: 30;
+              transform: translateX(102%); transition: transform .26s ease; }
+    body.m-open .detail { transform: none; }
+    .placeholder { display: none; }
+    .detail-pad { padding: calc(8px + env(safe-area-inset-top)) 18px
+                           calc(130px + env(safe-area-inset-bottom)); }
+    .m-back { display: inline-flex; }
+    .d-title { font-size: 20px; }
+    .player { position: fixed; left: 10px; right: 10px; top: auto;
+              bottom: calc(12px + env(safe-area-inset-bottom)); z-index: 5;
+              box-shadow: 0 10px 30px rgba(0,0,0,.5); padding: 12px 14px; }
+    .play-btn { width: 44px; height: 44px; font-size: 16px; }
+    .tab { padding: 11px 16px; font-size: 14px; }
+    .spk-pop input { min-width: 0; flex: 1; }
+    #mini.show { display: flex; }
+    body.m-open #mini { display: none; }
+  }
   @media (prefers-reduced-motion: no-preference) {
     .row, .cat, .dial i, .play-btn { transition: background .12s ease, color .12s ease, box-shadow .12s ease; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .detail { transition: none; }
   }
 </style>
 </head>
@@ -205,7 +297,9 @@
     <div class="brand">
       <h1>回音壁</h1>
       <div class="sub" id="brandSub"></div>
+      <button id="themeBtn" class="theme-btn" aria-label="切换深浅色模式">◐</button>
     </div>
+    <div id="syncPill" hidden role="status"></div>
     <div class="search"><input id="q" type="search" placeholder="搜索标题或转写 (/)" aria-label="搜索"></div>
     <div class="cats" id="cats" role="listbox" aria-label="分类"></div>
     <div class="stats" id="stats"></div>
@@ -214,6 +308,11 @@
   <section class="detail" id="detail"><div class="placeholder">选择一条录音开始</div></section>
 </div>
 <audio id="audio" preload="none"></audio>
+<div id="mini" role="button" aria-label="回到正在播放的录音">
+  <button class="play-btn" id="miniBtn" aria-label="播放/暂停">▶</button>
+  <div class="mtw"><div class="mt" id="miniTitle"></div><div class="mp" id="miniTime"></div></div>
+  <div class="mbar"><b id="miniFill"></b></div>
+</div>
 <script src="marked.min.js"></script>
 <script id="payload" type="application/json">__PAYLOAD__</script>
 <script>
@@ -239,8 +338,28 @@ const fmtDurCN = s => {
 const durClass = s => s >= 2700 ? "long" : s >= 600 ? "mid" : "short";
 
 let state = { cat: null, spk: null, q: "", sel: null, tab: "summary" };
-/* Editing needs the desktop app's loopback API; file:// stays read-only. */
-const CAN_EDIT = location.protocol.startsWith("http");
+/* Editing needs the desktop app's loopback API; file:// stays read-only.
+   The mobile app lands on /index.html?m=1: read-only browser + sync UI —
+   manager ops stay on desktop, so ?m=1 turns editing off deterministically. */
+const IS_APP_MOBILE = new URLSearchParams(location.search).has("m");
+const CAN_EDIT = location.protocol.startsWith("http") && !IS_APP_MOBILE;
+const PINNED = new Set();
+const isMobile = () => matchMedia("(max-width: 719px)").matches;
+
+/* ---------- theme (manual override beats system, persisted) ---------- */
+const THEME_KEY = "echowall-theme";
+const sysLight = matchMedia("(prefers-color-scheme: light)");
+const effTheme = () =>
+  document.documentElement.dataset.theme || (sysLight.matches ? "light" : "dark");
+function applyTheme(t) {
+  if (t) document.documentElement.dataset.theme = t;
+  else delete document.documentElement.dataset.theme;
+  const btn = $("#themeBtn");
+  btn.textContent = effTheme() === "light" ? "☾" : "☀";
+  btn.title = effTheme() === "light" ? "切到深色" : "切到浅色";
+}
+/* Speaker hues depend on the effective theme — re-render everything visible. */
+function rethemeRender() { renderSide(); renderList(); if (state.sel) select(state.sel, { keepNav: true }); }
 
 const slotsOf = e => [...new Set([
   ...((e.transcript || "").match(/SPEAKER[_ ]?\d+/g) || []),
@@ -272,7 +391,7 @@ const spkHue = name => {
 const spkColor = (name, alpha) => {
   const custom = (DATA.speaker_colors || {})[name];
   if (custom) return alpha ? `color-mix(in srgb, ${custom} ${alpha * 100}%, transparent)` : custom;
-  const light = matchMedia("(prefers-color-scheme: light)").matches;
+  const light = effTheme() === "light";
   return `hsl(${spkHue(name)} 60% ${light ? 38 : 68}%${alpha ? " / " + alpha : ""})`;
 };
 const avatarEl = name => {
@@ -413,7 +532,7 @@ function renderList() {
 /* ---------- detail + player ---------- */
 const audio = $("#audio");
 let playing = null;
-function select(key) {
+function select(key, opts) {
   state.sel = key;
   // Switching to a different recording stops the previous one — otherwise
   // the old audio keeps playing with no visible control to stop it.
@@ -424,6 +543,19 @@ function select(key) {
   if (row) row.scrollIntoView({ block: "nearest" });
   const d = $("#detail"); d.textContent = "";
   const pad = el("div", "detail-pad");
+
+  // Phone: detail is a pushed screen; back = button, edge swipe, or system back.
+  // keepNav rebuilds content without changing which screen is showing (theme
+  // re-render must not pop the detail open over the list).
+  if (isMobile()) {
+    const back = el("button", "m-back", "‹ 返回");
+    back.onclick = () => closeDetail();
+    pad.append(back);
+    if (!(opts && opts.keepNav) && !document.body.classList.contains("m-open")) {
+      document.body.classList.add("m-open");
+      history.pushState({ m: 1 }, "");
+    }
+  }
 
   const head = el("div", "d-head");
   head.append(el("div", "d-cat", e.category));
@@ -583,6 +715,36 @@ function buildPlayer(e) {
   seek.append(fill);
   const time = el("span", "ptime", "0:00");
   box.append(btn, seek, time);
+  if (IS_APP_MOBILE) {
+    const pin = el("button", "pin-btn" + (PINNED.has(e.audio) ? " on" : ""), "↓");
+    const label = on => {
+      pin.classList.toggle("on", on);
+      pin.textContent = on ? "✓" : "↓";
+      pin.setAttribute("aria-label", on ? "已离线保存,点击移除" : "离线保存音频");
+      pin.title = on ? "已离线" : "离线保存";
+    };
+    label(PINNED.has(e.audio));
+    pin.onclick = async () => {
+      const on = !PINNED.has(e.audio);
+      pin.textContent = "…";
+      try {
+        const r = await fetch("/api/sync/pin", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ rel: e.audio, on }),
+        });
+        if (!(await r.json()).ok) throw new Error();
+        on ? PINNED.add(e.audio) : PINNED.delete(e.audio);
+        label(on);
+        toast(on ? "已离线保存" : "已移除离线音频");
+      } catch (_) { label(!on); toast("离线保存失败 · 重试"); }
+    };
+    box.append(pin);
+    // Offline with nothing local: a dead play button needs to say why.
+    if (!navigator.onLine && !PINNED.has(e.audio)) {
+      btn.disabled = true;
+      time.textContent = "离线未缓存";
+    }
+  }
   const load = () => {
     if (playing !== e.key) { audio.src = e.audio; playing = e.key; }
   };
@@ -714,6 +876,50 @@ document.addEventListener("keydown", ev => {
 });
 $("#q").addEventListener("input", ev => { state.q = ev.target.value; renderList(); });
 
+/* ---------- phone navigation (detail push) ---------- */
+function closeDetail() {
+  if (history.state && history.state.m) history.back();
+  else document.body.classList.remove("m-open");
+}
+window.addEventListener("popstate", () => document.body.classList.remove("m-open"));
+// Edge swipe back: start within 28px of the left edge, drag right 70px.
+let _sw = null;
+$("#detail").addEventListener("touchstart", ev => {
+  _sw = ev.touches[0].clientX < 28 ? ev.touches[0].clientX : null;
+}, { passive: true });
+$("#detail").addEventListener("touchmove", ev => {
+  if (_sw != null && ev.touches[0].clientX - _sw > 70) { _sw = null; closeDetail(); }
+}, { passive: true });
+
+/* ---------- mini player (phone list screen) ---------- */
+const mini = $("#mini");
+function syncMini() {
+  const e = playing && DATA.entries.find(x => x.key === playing);
+  mini.classList.toggle("show", !!e);
+  if (!e) return;
+  $("#miniTitle").textContent = e.ai_title;
+  $("#miniBtn").textContent = audio.paused ? "▶" : "⏸";
+  if (audio.duration) {
+    $("#miniTime").textContent = fmtDur(audio.currentTime) + " / " + fmtDur(audio.duration);
+    $("#miniFill").style.width = audio.currentTime / audio.duration * 100 + "%";
+  }
+}
+["play", "pause", "timeupdate", "emptied"].forEach(ev => audio.addEventListener(ev, syncMini));
+$("#miniBtn").onclick = ev => { ev.stopPropagation(); audio.paused ? audio.play() : audio.pause(); };
+mini.onclick = () => { if (playing) select(playing); };
+
+/* ---------- theme init ---------- */
+applyTheme(localStorage.getItem(THEME_KEY) || null);
+$("#themeBtn").onclick = () => {
+  const next = effTheme() === "light" ? "dark" : "light";
+  localStorage.setItem(THEME_KEY, next);
+  applyTheme(next);
+  rethemeRender();
+};
+sysLight.addEventListener("change", () => {
+  if (!document.documentElement.dataset.theme) { applyTheme(null); rethemeRender(); }
+});
+
 /* Live sync with the archive (http only — the desktop app; file:// can't
    fetch). Speaker/category changes merge in place with no page reload — a
    full reload (which loses scroll/selection) happens only when the entry
@@ -740,6 +946,65 @@ if (location.protocol.startsWith("http")) {
     })
     .catch(() => {});
   setInterval(sync, 30000);
+}
+
+/* ---------- mobile app sync surface (?m=1 only) ---------- */
+function toast(msg) {
+  let t = $("#toast");
+  if (!t) { t = el("div"); t.id = "toast"; document.body.append(t); }
+  t.textContent = msg;
+  t.classList.add("show");
+  clearTimeout(t._h);
+  t._h = setTimeout(() => t.classList.remove("show"), 2600);
+}
+if (IS_APP_MOBILE) {
+  const pill = $("#syncPill");
+  pill.hidden = false;
+  const ago = iso => {
+    if (!iso) return "";
+    const m = Math.round((Date.now() - new Date(iso)) / 60000);
+    return m < 1 ? "刚刚" : m < 60 ? `${m} 分钟前` : m < 1440 ? `${Math.round(m / 60)} 小时前` : `${Math.round(m / 1440)} 天前`;
+  };
+  fetch("/api/sync/pins").then(r => r.json()).then(j => {
+    (j.pins || []).forEach(p => PINNED.add(p));
+    if (state.sel) select(state.sel, { keepNav: true });
+  }).catch(() => {});
+  let wasSyncing = false;
+  const render = j => {
+    pill.className = "";
+    if (j.state === "syncing") { pill.classList.add("busy"); pill.textContent = "同步中…"; }
+    else if (j.state === "unauthorized") { pill.classList.add("err"); pill.textContent = "token 已过期 · 重新配置"; }
+    else if (j.state === "offline") { pill.textContent = `离线 · 上次同步 ${ago(j.last_sync) || "未知"}`; }
+    else if (j.state === "error") { pill.classList.add("err"); pill.textContent = "同步失败 · 点击重试"; }
+    else if (j.state === "no-tokens") { pill.classList.add("err"); pill.textContent = "未配置 · 连接档案"; }
+    else { pill.textContent = `✓ 已同步 ${ago(j.last_sync)}`; }
+  };
+  const tick = async () => {
+    try {
+      const j = await (await fetch("/api/sync/status", { cache: "no-store" })).json();
+      render(j);
+      if (j.state === "syncing") { wasSyncing = true; setTimeout(tick, 1500); return; }
+      if (wasSyncing) {
+        wasSyncing = false;
+        // Pull finished — pick up a regenerated archive page right away
+        // instead of waiting for the 30s manifest poll.
+        fetch("manifest.json", { cache: "no-store" }).then(r => r.json()).then(man => {
+          if (Object.keys(man).length !== DATA.entries.length) location.reload();
+        }).catch(() => {});
+      }
+    } catch (_) {}
+  };
+  pill.onclick = async () => {
+    const j = await (await fetch("/api/sync/status", { cache: "no-store" })).json().catch(() => null);
+    if (j && (j.state === "unauthorized" || j.state === "no-tokens")) { location = "/setup"; return; }
+    if (j && j.state === "syncing") return;
+    await fetch("/api/sync/refresh", { method: "POST" }).catch(() => {});
+    tick();
+  };
+  tick();
+  addEventListener("online", tick);
+  addEventListener("offline", tick);
+  audio.addEventListener("error", () => { if (audio.src) toast("音频拉取失败 · 重试"); });
 }
 
 renderSide();

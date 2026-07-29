@@ -53,7 +53,19 @@ sandbox → manifest-driven R2 audio streaming with Range + LRU cache (cap
   60s on Wi-Fi; airplane mode → notes + pinned audio fully usable; tokens
   survive app restart; `git ls-files` leak scan still clean.
 
-## MOBILE-3: Mobile UX adaptation (same template, responsive)
+## MOBILE-3: Dedicated mobile layout (redesign, not retrofit)
+
+**AX direction (2026-07-28): mobile gets its own purpose-designed layout** —
+not a squeezed desktop retrofit. Same data payload, tokens, and render logic;
+the layout tier is designed for portrait touch from scratch. Process: 2-3
+divergent layout mockups rendered at phone viewport with demo data →
+`[TASTE FORK]` for AX to pick → implement the winner. Also add a `<meta
+viewport>` (mobile WebKit currently renders at ~980px virtual width).
+
+**Light/dark switch (AX, 2026-07-28): manual theme toggle on BOTH desktop and
+mobile** — one implementation in the shared template: toggle control +
+`data-theme` attribute override + localStorage persistence; system preference
+remains the default until the user flips it.
 
 Design source of truth: the graphite token set already in
 `viewer_template.html` (`--bg:#1a1a1a`, accent `#6cb0f5`, speaker palette,
@@ -88,9 +100,11 @@ prefers-reduced-motion for sheet/push transitions.
 
 ## MOBILE-4: Distribution
 
-iOS: bundle id `ai.ax.echowall`, ASC app record via API, Apple Distribution
-cert + App Store provisioning profile (API-first, web fallback), build +
-upload to TestFlight via ASC API key; internal testing group. Android:
+iOS: bundle id stays `ai.ax.watch-transcriber` (AX 2026-07-29: invisible to
+users, display name is EchoWall; changing later = new app record), ASC app
+record, Apple Distribution cert + App Store provisioning profile (API-first,
+web fallback), build + upload to TestFlight via ASC API key; internal testing
+group. Android:
 generate upload keystore → `~/creds/apple`-style `~/creds/android/`, signed
 APK attached to GitHub Releases by the existing release workflow (new job).
 App icons + splash from the 回音壁 mark (regenerate the icons/ set at mobile
@@ -127,6 +141,176 @@ graphite identity) · system-alignment 9/10 (viewer_template vars ARE the
 design system) · responsive/a11y 8/10 · unresolved decisions: 0 critical,
 3 deferred above. Plan is design-complete for implementation.
 
+## Autonomous decisions (MOBILE-2, 2026-07-28)
+
+1. **Secure store = keyring v4 ecosystem** (`keyring-core` + `apple-native-keyring-store`
+   protected(iOS)/keychain(macOS) + `android-native-keyring-store` Keystore-encrypted
+   SharedPreferences) — no hand-rolled JNI. Tokens = one JSON blob, entry
+   `ai.ax.echowall`/`sync-tokens`, iOS access-policy `after-first-unlock`.
+2. **R2 access = SigV4 S3 GET/HEAD** against `<account>.r2.cloudflarestorage.com`
+   (region `auto`, UNSIGNED-PAYLOAD), no broker service. Test creds derived from
+   the existing Cloudflare API token: access_key_id = token id, secret =
+   sha256(token) — verified live with a HEAD 200. Real-device docs will say
+   "create an R2 API token (Object Read only)" which shows exactly this pair.
+3. **Data repo now commits `index.html` + `marked.min.js`** (`.gitignore`
+   flipped, a3f0e36): the mobile app pulls the built viewer from the tarball
+   instead of re-implementing viewer.py's payload builder in Rust. Pipeline's
+   archive_git carries the page along on every delivery.
+4. **Read-only gate = `?m=1` landing URL** — `CAN_EDIT = http && !IS_APP_MOBILE`;
+   deterministic at first render, no async probe flicker.
+5. **Pin = audio file exists under data/** (pull is overlay-only so pins
+   survive; LRU eviction walks only `audio-cache/`). Pin from cache = rename,
+   not re-download.
+6. **Deletions linger on mobile until re-setup** — overlay pull never deletes
+   local files; manifest drives the UI, so deleted recordings vanish from the
+   list, orphan files stay on disk. Acceptable v1; noted for a future
+   `--prune` pass.
+7. **Sim/testing credentials** = local `gh auth token` + derived cf_token pair,
+   entered through the real setup UI only — never committed, never bundled.
+8. **Android ndk-context bootstrap**: Tauri v2 does NOT initialize `ndk-context`
+   (only tao/android-activity do, and Tauri uses neither on Android), so
+   `android-native-keyring-store` panicked at startup. Fix = its own JNI export
+   is statically linked into `libdesktop_lib.so`; a hand-added
+   `io/crates/keyring/Keyring.kt` + a `Keyring.initializeNdkContext()` call in
+   `MainActivity.onCreate` **before** `super.onCreate()` hands over the context.
+   Rust side wraps `Store::new` in `catch_unwind` so a regression degrades to a
+   setup-page error instead of a crash loop.
+9. **TLS = bundled webpki roots via `use_preconfigured_tls`** (shared
+   `r2::http()` client). reqwest 0.13's `rustls` feature routes cert checks
+   through rustls-platform-verifier, which on Android needs JNI init + a
+   Gradle Kotlin component (`rustls-platform-verifier-android`) and panicked
+   mid-request. Two known hosts -> Mozilla roots everywhere, zero platform
+   glue. Every HTTP call site must use `r2::http()` — a stray
+   `reqwest::Client::new()` reintroduces the Android panic.
+
 ## Retro
 
-(appended per phase)
+### MOBILE-1 (2026-07-28, in progress)
+
+**iOS: PASS.** `tauri ios init` + dev build worked with zero project changes
+(scaffold already had `mobile_entry_point`). On iPhone 17 Pro simulator:
+bootstrap page rendered → demo data injected into sandbox
+(`$HOME/projects/side-projects/watch-transcriber/data` — HOME maps to the app
+container) → live-sync auto-entered the viewer (sidebar, categories, speaker
+colors, day groups all working). **Serving decision: axum loopback works
+unchanged on iOS** — `GET /index.html` 200, `Range: bytes=0-99` → **206**, so
+audio seeking holds; no asset-protocol migration needed. Viewer renders the
+desktop 3-pane layout crammed (expected — MOBILE-3), and followed the
+simulator's light appearance (template has a light fallback; decide dark-first
+vs follow-system in MOBILE-3).
+
+**Android: PASS after one patch.** `data_dir()`'s `$HOME` fallback would panic
+(no HOME in Android app processes) — fixed with a `#[cfg(mobile)]` block in
+setup that resolves `app.path().app_data_dir()` and routes it through the
+existing `WATCH_TRANSCRIBER_DATA` env check. Verified on the mio_api36_pixel8
+emulator: viewer fully renders (narrow viewport stacks the desktop panes
+vertically — usable but MOBILE-3 replaces it), `Range: bytes=0-99` → 206.
+Android facts: `app_data_dir()` = the **package root** `/data/data/<pkg>`
+(not `files/`); package name is `ai.ax.watch_transcriber` (dashes →
+underscores); demo-data injection = `tar | adb shell run-as <pkg> tar -x`.
+
+**⚠️ Release landmine:** `gen/android/app/build.gradle.kts` sets manifest
+placeholder `usesCleartextTraffic` **false for release** (true only in debug)
+— a release APK will refuse the loopback HTTP URL and white-screen. MOBILE-4
+must flip it (or ship a network-security-config allowing 127.0.0.1 only).
+
+### MOBILE-3 (2026-07-28, DONE — verified iPhone 17 Pro sim + Pixel 8 emulator)
+
+Implemented 时间流 (variant A, AX's taste-fork pick) as a mobile layer in the
+shared `viewer_template.html`: ≤719px breakpoint — full-screen list (brand +
+search + horizontal filter chips), detail as a pushed screen (返回 button,
+left-edge swipe, system back via pushState/popstate), bottom-docked player
+(44pt), mini-player bar over the list while audio plays; manual light/dark
+toggle on both desktop and mobile (`data-theme` on `<html>` +
+localStorage(`echowall-theme`), beats the system media query both ways —
+speaker hues re-render on change). Desktop 1440px verified pixel-unchanged;
+22 tests + ruff green.
+
+**Root cause of the day — `WebviewWindowBuilder.inner_size(1360, 900)` leaks
+into the MOBILE webview's CSS viewport** (WKWebView renders ~1360px wide,
+media queries never match, phone shows the desktop grid even though the
+viewport meta is correct). Fix: `#[cfg(not(mobile))]` on
+`inner_size`/`min_inner_size`. Also: WKWebView caches served pages hard —
+after template changes, uninstall/reinstall (or bump) before judging; the
+iOS app container UUID rotates on reinstall (re-resolve via
+`simctl get_app_container` every time); with the mobile data-dir patch the
+iOS data path is `<container>/Library/Application Support/<bundle-id>/data`.
+
+**Emulator quirks:** this AVD needs `-gpu swiftshader_indirect` (hardware GPU
+run showed chromium "tile memory limits exceeded" and a pure-white webview);
+default snapshot restore can resurface another project's session — cold-boot
+and reinstall before judging anything. The display pipeline can also die
+mid-session (screencap turns pure black even on the LAUNCHER) — check a
+known-good screen's brightness before blaming the app; cold restart fixes it. Tauri injects its init scripts twice on
+Android ("Cannot redefine property" console errors) — benign for the viewer,
+keep an eye on it.
+
+**Sim quirks:** `tauri ios dev` does NOT boot the target simulator (fails
+`simctl install` with SimError 405 on a Shutdown device) — boot it first.
+Piping tauri dev output through `tail` buffers everything invisibly — always
+redirect straight to a log file.
+
+### MOBILE-2 (2026-07-29, DONE — verified end-to-end on both simulators with the real archive)
+
+Sync core shipped: `secrets.rs` (keyring v4: iOS protected Keychain / Android
+Keystore-encrypted SharedPreferences / macOS keychain), `r2.rs` (SigV4 signing
++ streaming Range proxy + background cache fill + 500MB LRU eviction + shared
+webpki-roots reqwest client), `sync.rs` (tarball overlay pull, /api/sync/*
+surface, data→cache→R2 fallback serving), `setup.html` token page; viewer
+gained the `?m=1` mobile sync layer (pill states, pin button, offline player
+states, toast) with `CAN_EDIT` off. Unit tests: SigV4 AWS vector + signed-GET
+shape + tarball extract (prefix strip, `.git` skip, pin survival).
+
+**Verified with real tokens through the real setup APIs** (nothing bundled):
+- iOS sim: first-run setup → tokens validated + saved to Keychain → full
+  93-recording archive synced in ~3s → viewer entered; Range `bytes=0-99` →
+  206 via R2 proxy; second request served from warmed cache; pin → moves into
+  data/; app relaunch reloads tokens from Keychain and launch-syncs.
+- Android emu: same flow through Keystore; **airplane mode**: refresh →
+  `offline` state with stale archive intact, notes 200 from local, pinned
+  audio 206, unpinned 502 (viewer shows 离线未缓存); airplane off → recovers.
+- Desktop 1440: pixel-identical 3-pane, editing intact, no sync UI.
+
+**Two Android-only crashes found and fixed** (details in Autonomous decisions
+#8/#9): Tauri never initializes ndk-context → Keystore store panicked (fixed
+with the hand-added Kotlin bootstrap + catch_unwind); reqwest's
+rustls-platform-verifier panics without its Gradle component (fixed by
+switching every HTTP call to the shared `r2::http()` webpki-roots client).
+**Watcher gotcha:** `tauri android dev`'s file watcher deploys can leave the
+OLD process running (same port!) — `adb shell pidof` + `am force-stop` before
+judging a redeploy, and confirm the fix behavior changed.
+
+Not covered (deliberate): mid-flight token-expiry (401 after a valid save)
+only exercised at the classify() unit level — fabricating it would mean
+revoking the live test token; UI path exists (pill → 重新配置 → /setup).
+
+### MOBILE-4 (2026-07-29, DONE minus one 1-minute web step — CI 3/3 green)
+
+Distribution chain, API-first as planned: bundle id `ai.ax.watch-transcriber`
+registered (`ZD9JAFU449`), **Apple Distribution cert created via ASC API**
+(`R9L48TR57V` — resolves open unknown #4: only Developer ID is
+Account-Holder-gated), "EchoWall App Store" profile (`DZMX2B7NBZ`), all saved
+to ~/creds/apple with the p12 (WWDR **G3** chain, not the Developer ID G2).
+Android upload keystore → ~/creds/android + gradle signingConfig
+(keystore.properties local / env vars CI) + release cleartext fix + proguard
+keeps for the Keyring JNI class. release.yml now runs three lanes; run
+30436276848 = macos + ios + android ALL GREEN (dmg 10.9MB signed+notarized,
+App Store ipa 5.5MB, signed universal APK 25.8MB). Signed release APK
+verified on the emulator (installs, boots, serves — cleartext fix proven in
+the real release build).
+
+**The one human step:** the public ASC API cannot create app *records*
+(`POST /v1/apps` → 403 "does not allow CREATE" — not role-gated, just
+unsupported). Until AX creates the app in App Store Connect (New App → iOS →
+name "回音壁 EchoWall" → bundle id ai.ax.watch-transcriber → any SKU), the
+CI TestFlight step detects the missing record via `altool --list-apps` and
+skips with a warning; once the record exists the same lane uploads for real.
+
+**Failure worth remembering:** first CI run's ios lane died on
+`CpResource .../Externals/arm64/debug/libapp.a` — my `xcodegen generate` ran
+while local dev artifacts existed, so the bare `- path: Externals` sources
+entry captured libapp.a into the RESOURCES phase: fresh-checkout CI lacked
+the file (hard fail) and local ipas silently shipped a 400MB debug archive
+(109MB ipa → 5.6MB after `buildPhase: none`). With the full
+ExportOptions.plist committed, `tauri ios build --export-method
+app-store-connect` now works end-to-end — no xcodebuild fallback needed.
