@@ -324,7 +324,24 @@ min) → 0.2.0 ipa uploaded via altool (`UPLOAD SUCCEEDED`), processed to
 `VALID`, internal group "Internal" created via API with
 `hasAccessToAllBuilds` (future CI uploads land in it automatically) + AX
 added as tester. Install path: TestFlight app on the phone, signed in with
-the dev Apple ID.
+the dev Apple ID. Internal testers start as `INVITED` — the app shows up in
+TestFlight only after the email invite is accepted (resend via POST
+/v1/betaTesterInvitations). Export compliance: `ITSAppUsesNonExemptEncryption
+= false` in Info.plist (standard-TLS-only) kills the per-build dialog.
+
+**Seeded personal build (2026-07-29, 0.2.1 on TestFlight):** AX wanted zero
+token entry → compile-time seeding via `option_env!(ECHOWALL_SEED_*)` in
+secrets.rs (plants into Keychain on first run iff store empty; public/CI
+builds carry nothing). Getting the env to rustc took three attempts —
+xcodebuild script phases drop custom shell env, AND the xcode-script RPCs
+back to the parent `tauri ios build` process (cwd `desktop/`), so
+`src-tauri/.cargo/config.toml` is never discovered. Working recipe: put
+`[env]` seeding in a REPO-ROOT `.cargo/config.toml` (gitignored), touch
+src, build, VERIFY with `strings <app binary> | grep <account-id>` before
+uploading, then delete the config. tauri also rewrites Info.plist versions
+from tauri.conf.json every build — bump `version` there (0.2.1), not the
+plist. Seeded values = local gh token + derived cf_token pair (broader than
+read-only; swap for scoped tokens by reinstalling a public build later).
 
 **Failure worth remembering:** first CI run's ios lane died on
 `CpResource .../Externals/arm64/debug/libapp.a` — my `xcodegen generate` ran
