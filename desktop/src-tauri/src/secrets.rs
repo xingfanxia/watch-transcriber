@@ -67,6 +67,31 @@ fn entry() -> Result<keyring_core::Entry, String> {
     keyring_core::Entry::new(SERVICE, USER).map_err(|e| e.to_string())
 }
 
+/// Personal-build seeding: if ECHOWALL_SEED_* env vars were present at
+/// COMPILE time (option_env!), plant them into the secure store on first run
+/// so the owner's own build needs zero token entry. Public/CI builds never
+/// set these, so release binaries contain nothing. Values live only in the
+/// keychain afterwards — same lifecycle as manually entered tokens.
+pub fn seed_from_build_env() {
+    let (Some(pat), Some(acct), Some(akid), Some(secret)) = (
+        option_env!("ECHOWALL_SEED_GITHUB_PAT"),
+        option_env!("ECHOWALL_SEED_R2_ACCOUNT_ID"),
+        option_env!("ECHOWALL_SEED_R2_ACCESS_KEY_ID"),
+        option_env!("ECHOWALL_SEED_R2_SECRET"),
+    ) else {
+        return;
+    };
+    if load().is_some() {
+        return;
+    }
+    let _ = save(&SyncTokens {
+        github_pat: pat.into(),
+        r2_account_id: acct.into(),
+        r2_access_key_id: akid.into(),
+        r2_secret_access_key: secret.into(),
+    });
+}
+
 pub fn save(tokens: &SyncTokens) -> Result<(), String> {
     let blob = serde_json::to_string(tokens).map_err(|e| e.to_string())?;
     entry()?.set_password(&blob).map_err(|e| e.to_string())

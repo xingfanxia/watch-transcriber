@@ -48,6 +48,9 @@ pub struct SyncCtx {
 impl SyncCtx {
     /// Build the context and hydrate tokens + persisted state.
     pub fn new(data: PathBuf) -> Arc<Self> {
+        if cfg!(mobile) {
+            secrets::seed_from_build_env();
+        }
         let base = data.parent().unwrap_or(Path::new(".")).to_path_buf();
         let cache = base.join("audio-cache");
         let ctx = SyncCtx {
