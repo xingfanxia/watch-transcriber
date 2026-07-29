@@ -986,10 +986,21 @@ if (IS_APP_MOBILE) {
       if (j.state === "syncing") { wasSyncing = true; setTimeout(tick, 1500); return; }
       if (wasSyncing) {
         wasSyncing = false;
-        // Pull finished — pick up a regenerated archive page right away
-        // instead of waiting for the 30s manifest poll.
+        // Pull finished — the on-disk page/manifest may be newer than this
+        // loaded one. Mobile is read-only (no self-write reload loops), so
+        // reload on ANY substantive diff: new entries, speaker tags,
+        // categories, attachments. Transcript labels live in the embedded
+        // payload, so only a full reload can refresh them.
         fetch("manifest.json", { cache: "no-store" }).then(r => r.json()).then(man => {
-          if (Object.keys(man).length !== DATA.entries.length) location.reload();
+          const changed = Object.keys(man).length !== DATA.entries.length ||
+            DATA.entries.some(e => {
+              const src = man[e.key];
+              return src && (
+                JSON.stringify(src.speakers || {}) !== JSON.stringify(e.speakers || {}) ||
+                (src.category || "") !== (e.category || "") ||
+                JSON.stringify(src.attachments || []) !== JSON.stringify(e.attachments || []));
+            });
+          if (changed) location.reload();
         }).catch(() => {});
       }
     } catch (_) {}
