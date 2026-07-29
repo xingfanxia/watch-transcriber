@@ -30,7 +30,12 @@ targets:
     sources:
       - path: Sources
       - path: Assets.xcassets
+      # Externals holds the cargo-built libapp.a; linking goes through the
+      # framework dependency + LIBRARY_SEARCH_PATHS. Without buildPhase: none,
+      # xcodegen picks up whatever .a files exist at generation time and ships
+      # them as app RESOURCES (breaks fresh-checkout CI, bloats the ipa).
       - path: Externals
+        buildPhase: none
       - path: desktop_iOS
       - path: assets
         buildPhase: resources
