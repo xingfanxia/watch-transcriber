@@ -306,6 +306,20 @@ name "回音壁 EchoWall" → bundle id ai.ax.watch-transcriber → any SKU), th
 CI TestFlight step detects the missing record via `altool --list-apps` and
 skips with a warning; once the record exists the same lane uploads for real.
 
+### MOBILE-5 (2026-07-29, DONE — v0.2.0 shipped)
+
+Bilingual README `## Mobile` sections (the anchor the in-app setup page links
+to) + token guide + 4 demo-data screenshots (mock sync-API server + Chrome
+device emulation — the app's setup/pill/pin UI needs `/api/sync/*` to render,
+plain `http.server` can't); CLAUDE.md `## Mobile` landmine list;
+desktop/README covers the mobile build; ~/creds README gained android/ +
+distribution rows; project memory synced. spike/mobile-init merged to main
+(38b8666), tag v0.2.0 → release run 30437407029 all-green: Release carries
+`EchoWall_0.2.0_universal.dmg` (signed+notarized) + `EchoWall_0.2.0_universal.apk`
+(upload-keystore signed); App Store ipa on the run as a workflow artifact.
+Leak scan clean throughout. Only open item: the 1-minute ASC app-record web
+step above, after which the ios lane uploads to TestFlight by itself.
+
 **Failure worth remembering:** first CI run's ios lane died on
 `CpResource .../Externals/arm64/debug/libapp.a` — my `xcodegen generate` ran
 while local dev artifacts existed, so the bare `- path: Externals` sources
