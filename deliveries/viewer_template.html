@@ -201,6 +201,25 @@
                font-size: 14px; display: grid; place-items: center; }
   .theme-btn:hover { color: var(--amber); border-color: var(--amber-deep); }
 
+  /* Mobile sync surface: status pill under the brand, offline-pin button in
+     the player, transient toast. Hidden unless the app reveals them (?m=1). */
+  #syncPill { display: block; margin: 10px 0 -2px; width: max-content; max-width: 100%;
+              font-family: var(--mono); font-size: 11px; color: var(--faint);
+              border: 1px solid var(--line); border-radius: 999px; padding: 5px 12px;
+              white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+  #syncPill[hidden] { display: none; }
+  #syncPill.busy { color: var(--amber); border-color: var(--amber-deep); }
+  #syncPill.err { color: #e07070; border-color: #e0707055; }
+  .pin-btn { min-width: 34px; height: 34px; border: 1px solid var(--line); border-radius: 50%;
+             color: var(--dim); font-size: 13px; display: grid; place-items: center; }
+  .pin-btn.on { color: var(--amber); border-color: var(--amber-deep); }
+  #toast { position: fixed; left: 50%; transform: translateX(-50%);
+           bottom: calc(88px + env(safe-area-inset-bottom)); z-index: 40;
+           background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+           color: var(--ink); font-size: 12.5px; padding: 9px 14px; opacity: 0;
+           pointer-events: none; transition: opacity .25s; box-shadow: 0 8px 24px rgba(0,0,0,.4); }
+  #toast.show { opacity: 1; }
+
   /* Mobile back affordance + mini player exist in the DOM at every width but
      only the phone breakpoint reveals them. */
   .m-back { display: none; align-items: center; color: var(--amber); font-size: 15px;
@@ -280,6 +299,7 @@
       <div class="sub" id="brandSub"></div>
       <button id="themeBtn" class="theme-btn" aria-label="切换深浅色模式">◐</button>
     </div>
+    <div id="syncPill" hidden role="status"></div>
     <div class="search"><input id="q" type="search" placeholder="搜索标题或转写 (/)" aria-label="搜索"></div>
     <div class="cats" id="cats" role="listbox" aria-label="分类"></div>
     <div class="stats" id="stats"></div>
@@ -318,8 +338,12 @@ const fmtDurCN = s => {
 const durClass = s => s >= 2700 ? "long" : s >= 600 ? "mid" : "short";
 
 let state = { cat: null, spk: null, q: "", sel: null, tab: "summary" };
-/* Editing needs the desktop app's loopback API; file:// stays read-only. */
-const CAN_EDIT = location.protocol.startsWith("http");
+/* Editing needs the desktop app's loopback API; file:// stays read-only.
+   The mobile app lands on /index.html?m=1: read-only browser + sync UI —
+   manager ops stay on desktop, so ?m=1 turns editing off deterministically. */
+const IS_APP_MOBILE = new URLSearchParams(location.search).has("m");
+const CAN_EDIT = location.protocol.startsWith("http") && !IS_APP_MOBILE;
+const PINNED = new Set();
 const isMobile = () => matchMedia("(max-width: 719px)").matches;
 
 /* ---------- theme (manual override beats system, persisted) ---------- */
@@ -691,6 +715,36 @@ function buildPlayer(e) {
   seek.append(fill);
   const time = el("span", "ptime", "0:00");
   box.append(btn, seek, time);
+  if (IS_APP_MOBILE) {
+    const pin = el("button", "pin-btn" + (PINNED.has(e.audio) ? " on" : ""), "↓");
+    const label = on => {
+      pin.classList.toggle("on", on);
+      pin.textContent = on ? "✓" : "↓";
+      pin.setAttribute("aria-label", on ? "已离线保存,点击移除" : "离线保存音频");
+      pin.title = on ? "已离线" : "离线保存";
+    };
+    label(PINNED.has(e.audio));
+    pin.onclick = async () => {
+      const on = !PINNED.has(e.audio);
+      pin.textContent = "…";
+      try {
+        const r = await fetch("/api/sync/pin", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ rel: e.audio, on }),
+        });
+        if (!(await r.json()).ok) throw new Error();
+        on ? PINNED.add(e.audio) : PINNED.delete(e.audio);
+        label(on);
+        toast(on ? "已离线保存" : "已移除离线音频");
+      } catch (_) { label(!on); toast("离线保存失败 · 重试"); }
+    };
+    box.append(pin);
+    // Offline with nothing local: a dead play button needs to say why.
+    if (!navigator.onLine && !PINNED.has(e.audio)) {
+      btn.disabled = true;
+      time.textContent = "离线未缓存";
+    }
+  }
   const load = () => {
     if (playing !== e.key) { audio.src = e.audio; playing = e.key; }
   };
@@ -892,6 +946,65 @@ if (location.protocol.startsWith("http")) {
     })
     .catch(() => {});
   setInterval(sync, 30000);
+}
+
+/* ---------- mobile app sync surface (?m=1 only) ---------- */
+function toast(msg) {
+  let t = $("#toast");
+  if (!t) { t = el("div"); t.id = "toast"; document.body.append(t); }
+  t.textContent = msg;
+  t.classList.add("show");
+  clearTimeout(t._h);
+  t._h = setTimeout(() => t.classList.remove("show"), 2600);
+}
+if (IS_APP_MOBILE) {
+  const pill = $("#syncPill");
+  pill.hidden = false;
+  const ago = iso => {
+    if (!iso) return "";
+    const m = Math.round((Date.now() - new Date(iso)) / 60000);
+    return m < 1 ? "刚刚" : m < 60 ? `${m} 分钟前` : m < 1440 ? `${Math.round(m / 60)} 小时前` : `${Math.round(m / 1440)} 天前`;
+  };
+  fetch("/api/sync/pins").then(r => r.json()).then(j => {
+    (j.pins || []).forEach(p => PINNED.add(p));
+    if (state.sel) select(state.sel, { keepNav: true });
+  }).catch(() => {});
+  let wasSyncing = false;
+  const render = j => {
+    pill.className = "";
+    if (j.state === "syncing") { pill.classList.add("busy"); pill.textContent = "同步中…"; }
+    else if (j.state === "unauthorized") { pill.classList.add("err"); pill.textContent = "token 已过期 · 重新配置"; }
+    else if (j.state === "offline") { pill.textContent = `离线 · 上次同步 ${ago(j.last_sync) || "未知"}`; }
+    else if (j.state === "error") { pill.classList.add("err"); pill.textContent = "同步失败 · 点击重试"; }
+    else if (j.state === "no-tokens") { pill.classList.add("err"); pill.textContent = "未配置 · 连接档案"; }
+    else { pill.textContent = `✓ 已同步 ${ago(j.last_sync)}`; }
+  };
+  const tick = async () => {
+    try {
+      const j = await (await fetch("/api/sync/status", { cache: "no-store" })).json();
+      render(j);
+      if (j.state === "syncing") { wasSyncing = true; setTimeout(tick, 1500); return; }
+      if (wasSyncing) {
+        wasSyncing = false;
+        // Pull finished — pick up a regenerated archive page right away
+        // instead of waiting for the 30s manifest poll.
+        fetch("manifest.json", { cache: "no-store" }).then(r => r.json()).then(man => {
+          if (Object.keys(man).length !== DATA.entries.length) location.reload();
+        }).catch(() => {});
+      }
+    } catch (_) {}
+  };
+  pill.onclick = async () => {
+    const j = await (await fetch("/api/sync/status", { cache: "no-store" })).json().catch(() => null);
+    if (j && (j.state === "unauthorized" || j.state === "no-tokens")) { location = "/setup"; return; }
+    if (j && j.state === "syncing") return;
+    await fetch("/api/sync/refresh", { method: "POST" }).catch(() => {});
+    tick();
+  };
+  tick();
+  addEventListener("online", tick);
+  addEventListener("offline", tick);
+  audio.addEventListener("error", () => { if (audio.src) toast("音频拉取失败 · 重试"); });
 }
 
 renderSide();

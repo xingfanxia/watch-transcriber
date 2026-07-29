@@ -7,6 +7,10 @@
 //! Loopback note: the server binds 127.0.0.1 on a random port with no auth,
 //! so the archive is readable by local processes while the app runs.
 
+mod r2;
+mod secrets;
+mod sync;
+
 use std::path::{Path, PathBuf};
 
 use axum::extract::State;
@@ -16,7 +20,6 @@ use axum::routing::{get, post};
 use axum::Json;
 use serde_json::Value;
 use tauri::{WebviewUrl, WebviewWindowBuilder};
-use tower_http::services::ServeDir;
 
 /// Merge speaker-tag updates into data/manifest.json and persist them to the
 /// private notes repo. The archive's user-authored state lives ONLY in the
@@ -311,32 +314,62 @@ pub fn run() {
             }
             let dir = data_dir();
             let ready = dir.join("index.html").exists();
+            let ctx = sync::SyncCtx::new(dir.clone());
+            let has_tokens = ctx.gh.read().unwrap().is_some();
 
             let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
             let port = listener.local_addr()?.port();
+            let srv_ctx = ctx.clone();
             std::thread::spawn(move || {
                 let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
                 rt.block_on(async move {
                     listener.set_nonblocking(true).expect("nonblocking listener");
                     let listener = tokio::net::TcpListener::from_std(listener)
                         .expect("tokio listener");
+                    // Sync-on-launch: mobile with saved tokens refreshes the
+                    // archive in the background while the viewer opens.
+                    if cfg!(mobile) && has_tokens {
+                        tokio::spawn(sync::pull(srv_ctx.clone()));
+                    }
                     // /bootstrap is the fresh-machine landing page: it polls
                     // /index.html and redirects once restore_archive.py ran.
-                    let router: axum::Router = axum::Router::new()
-                        .route("/bootstrap", get(|| async {
-                            Html(include_str!("bootstrap.html"))
-                        }))
+                    // /setup is the mobile first-run token page.
+                    let desktop_api: axum::Router = axum::Router::new()
                         .route("/api/speakers", post(save_speakers))
                         .route("/api/attachments", post(save_attachment))
                         .route("/api/delete", post(delete_recording))
                         .route("/api/speaker-colors", post(save_speaker_color))
-                        .fallback_service(ServeDir::new(dir.clone()))
                         .with_state(dir);
+                    let sync_api: axum::Router = axum::Router::new()
+                        .route("/bootstrap", get(|| async {
+                            Html(include_str!("bootstrap.html"))
+                        }))
+                        .route("/setup", get(|| async {
+                            Html(include_str!("setup.html"))
+                        }))
+                        .route("/api/sync/status", get(sync::status))
+                        .route("/api/sync/tokens", post(sync::save_tokens))
+                        .route("/api/sync/refresh", post(sync::refresh))
+                        .route("/api/sync/pins", get(sync::pins))
+                        .route("/api/sync/pin", post(sync::set_pin))
+                        .fallback(get(sync::serve_or_fetch))
+                        .with_state(srv_ctx);
+                    let router = desktop_api.merge(sync_api);
                     axum::serve(listener, router).await.expect("archive server");
                 });
             });
 
-            let page = if ready { "index.html" } else { "bootstrap" };
+            // Mobile: viewer with ?m=1 (read-only + sync UI) once the archive
+            // exists, token setup otherwise. Desktop: unchanged.
+            let page = if cfg!(mobile) {
+                // Tokens saved but archive not landed yet -> setup resumes its
+                // sync-progress polling and enters the viewer when done.
+                if ready { "index.html?m=1" } else { "setup" }
+            } else if ready {
+                "index.html"
+            } else {
+                "bootstrap"
+            };
             let url = format!("http://127.0.0.1:{port}/{page}");
             let win = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url.parse()?))
                 .title("回音壁 EchoWall");

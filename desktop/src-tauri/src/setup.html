@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>回音壁 · 连接档案</title>
+<style>
+  :root { --bg:#1a1a1a; --panel:#232323; --line:#343434; --ink:#ececec; --dim:#a0a0a0;
+          --accent:#6cb0f5; --err:#e07070; --ok:#7fc98a; }
+  @media (prefers-color-scheme: light) {
+    :root { --bg:#f4f4f2; --panel:#ffffff; --line:#dcdcd8; --ink:#242424; --dim:#6b6b6b; }
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:var(--bg); color:var(--ink); min-height:100vh;
+         font-family:"PingFang SC",-apple-system,sans-serif;
+         padding:calc(env(safe-area-inset-top) + 28px) 20px calc(env(safe-area-inset-bottom) + 28px); }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:16px;
+          padding:26px 22px; max-width:480px; margin:0 auto; }
+  h1 { font-size:19px; margin-bottom:6px; }
+  .sub { color:var(--dim); font-size:13px; line-height:1.6; margin-bottom:18px; }
+  .sub a { color:var(--accent); text-decoration:none; }
+  label { display:block; font-size:12.5px; color:var(--dim); margin:14px 0 6px; }
+  input { width:100%; min-height:44px; padding:10px 12px; border-radius:10px;
+          border:1px solid var(--line); background:var(--bg); color:var(--ink);
+          font:13.5px ui-monospace,Menlo,monospace; }
+  input:focus { outline:none; border-color:var(--accent); }
+  .field-err { color:var(--err); font-size:12px; margin-top:5px; display:none; }
+  details { margin-top:16px; }
+  summary { color:var(--dim); font-size:12.5px; cursor:pointer; min-height:32px; }
+  button { width:100%; min-height:48px; margin-top:22px; border:none; border-radius:12px;
+           background:var(--accent); color:#10233a; font-size:15px; font-weight:600; }
+  button:disabled { opacity:.55; }
+  .status { margin-top:14px; font-size:13px; color:var(--dim); text-align:center; min-height:20px; }
+  .status.ok { color:var(--ok); }
+  .status.err { color:var(--err); }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>连接你的档案</h1>
+  <p class="sub">回音壁直接从你的私有备份拉取 —— 需要两份只读凭据,只存在本机安全存储(Keychain / Keystore)。<a href="https://github.com/xingfanxia/watch-transcriber#mobile" target="_blank">从 README 获取 token →</a></p>
+
+  <label>GitHub token(fine-grained PAT · 笔记仓库 contents:read)</label>
+  <input id="github_pat" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="github_pat_…">
+  <div class="field-err" id="err-github"></div>
+
+  <label>R2 Account ID</label>
+  <input id="r2_account_id" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Cloudflare 账户 ID">
+  <label>R2 Access Key ID</label>
+  <input id="r2_access_key_id" autocomplete="off" autocapitalize="off" spellcheck="false">
+  <label>R2 Secret Access Key</label>
+  <input id="r2_secret_access_key" type="password" autocomplete="off">
+  <div class="field-err" id="err-r2"></div>
+
+  <details>
+    <summary>高级(默认即可)</summary>
+    <label>笔记仓库</label>
+    <input id="repo" value="xingfanxia/watch-transcriber-data">
+    <label>音频 bucket</label>
+    <input id="bucket" value="watch-transcriber-audio">
+  </details>
+
+  <button id="go">连接并同步</button>
+  <div class="status" id="status"></div>
+</div>
+<script>
+const $ = id => document.getElementById(id);
+const status = (msg, cls) => { const s = $("status"); s.textContent = msg; s.className = "status " + (cls || ""); };
+const clearErrs = () => ["err-github", "err-r2"].forEach(id => { $(id).style.display = "none"; });
+
+$("go").onclick = async () => {
+  clearErrs();
+  const body = {};
+  for (const k of ["github_pat", "r2_account_id", "r2_access_key_id", "r2_secret_access_key", "repo", "bucket"])
+    body[k] = $(k).value.trim();
+  if (!body.github_pat || !body.r2_access_key_id) { status("请先填好两份凭据", "err"); return; }
+  $("go").disabled = true;
+  status("验证凭据中…");
+  try {
+    const r = await fetch("/api/sync/tokens", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    });
+    const j = await r.json();
+    if (!j.ok) {
+      const el = j.field === "github" ? $("err-github") : $("err-r2");
+      el.textContent = j.error || "验证失败";
+      el.style.display = "block";
+      status("请检查标红的凭据", "err");
+      $("go").disabled = false;
+      return;
+    }
+  } catch (e) {
+    status("需要网络完成首次同步", "err");
+    $("go").disabled = false;
+    return;
+  }
+  status("✓ 已连接 · 正在同步档案…", "ok");
+  await fetch("/api/sync/refresh", { method: "POST" });
+  poll();
+};
+
+async function poll() {
+  try {
+    const j = await (await fetch("/api/sync/status", { cache: "no-store" })).json();
+    if (j.state === "ok" && j.recordings > 0) {
+      status(`✓ 已连接 · ${j.recordings} 条录音`, "ok");
+      setTimeout(() => location = "/index.html?m=1", 600);
+      return;
+    }
+    if (["error", "offline", "unauthorized"].includes(j.state)) {
+      status(j.error ? `同步失败:${j.error}` : "同步失败,请重试", "err");
+      $("go").disabled = false;
+      $("go").textContent = "重试同步";
+      return;
+    }
+  } catch (e) {}
+  setTimeout(poll, 1500);
+}
+
+// Already-configured relaunch while archive still syncing: resume polling.
+fetch("/api/sync/status").then(r => r.json()).then(j => {
+  if (j.state === "syncing") { $("go").disabled = true; status("正在同步档案…"); poll(); }
+}).catch(() => {});
+</script>
+</body>
+</html>
