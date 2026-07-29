@@ -13,6 +13,20 @@ val tauriProperties = Properties().apply {
     }
 }
 
+// Release signing: keystore.properties (gitignored, local) or env vars (CI).
+// Keys: storeFile / storePassword / keyAlias / keyPassword.
+val keystoreProperties = Properties().apply {
+    val f = rootProject.file("keystore.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+    System.getenv("ANDROID_KEYSTORE_PATH")?.let {
+        setProperty("storeFile", it)
+        setProperty("storePassword", System.getenv("ANDROID_KEYSTORE_PASSWORD") ?: "")
+        setProperty("keyAlias", System.getenv("ANDROID_KEY_ALIAS") ?: "echowall")
+        setProperty("keyPassword", System.getenv("ANDROID_KEY_PASSWORD")
+            ?: (System.getenv("ANDROID_KEYSTORE_PASSWORD") ?: ""))
+    }
+}
+
 android {
     compileSdk = 36
     namespace = "ai.ax.watch_transcriber"
@@ -23,6 +37,16 @@ android {
         targetSdk = 36
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
+    }
+    signingConfigs {
+        create("release") {
+            if (keystoreProperties.getProperty("storeFile") != null) {
+                storeFile = file(keystoreProperties.getProperty("storeFile"))
+                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+            }
+        }
     }
     buildTypes {
         getByName("debug") {
@@ -37,6 +61,14 @@ android {
             }
         }
         getByName("release") {
+            // The whole app is served from an in-process 127.0.0.1 server —
+            // cleartext must stay allowed in release or the webview
+            // white-screens (MOBILE-1 landmine). Loopback never leaves the
+            // device; sync/audio traffic is HTTPS.
+            manifestPlaceholders["usesCleartextTraffic"] = "true"
+            if (keystoreProperties.getProperty("storeFile") != null) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             isMinifyEnabled = true
             proguardFiles(
                 *fileTree(".") { include("**/*.pro") }

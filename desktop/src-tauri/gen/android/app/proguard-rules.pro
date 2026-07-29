@@ -19,3 +19,8 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+# JNI binding for the Keystore-backed credential store: the native symbol
+# Java_io_crates_keyring_Keyring_... is resolved by class name — renaming or
+# stripping this class breaks token storage in release builds.
+-keep class io.crates.keyring.Keyring { *; }
+-keep class io.crates.keyring.Keyring$Companion { *; }

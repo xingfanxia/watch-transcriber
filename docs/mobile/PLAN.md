@@ -100,9 +100,11 @@ prefers-reduced-motion for sheet/push transitions.
 
 ## MOBILE-4: Distribution
 
-iOS: bundle id `ai.ax.echowall`, ASC app record via API, Apple Distribution
-cert + App Store provisioning profile (API-first, web fallback), build +
-upload to TestFlight via ASC API key; internal testing group. Android:
+iOS: bundle id stays `ai.ax.watch-transcriber` (AX 2026-07-29: invisible to
+users, display name is EchoWall; changing later = new app record), ASC app
+record, Apple Distribution cert + App Store provisioning profile (API-first,
+web fallback), build + upload to TestFlight via ASC API key; internal testing
+group. Android:
 generate upload keystore → `~/creds/apple`-style `~/creds/android/`, signed
 APK attached to GitHub Releases by the existing release workflow (new job).
 App icons + splash from the 回音壁 mark (regenerate the icons/ set at mobile

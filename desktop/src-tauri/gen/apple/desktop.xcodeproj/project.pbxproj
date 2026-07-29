@@ -14,6 +14,7 @@
 		4EB31719E5BA4F1D7D05E3F5 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 5D9B1A5350D90F61AD5C52B0 /* Assets.xcassets */; };
 		7E0E52D89107A801AD87E261 /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C1884EE328BA41280C18F605 /* UIKit.framework */; };
 		896EF8EF42FC1C873E11B011 /* libapp.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 74836CA5EB5832243D76DD9D /* libapp.a */; };
+		9615A2C9DB979608A93CF72A /* libapp.a in Resources */ = {isa = PBXBuildFile; fileRef = 8AB56B8219EE809C5C3185CC /* libapp.a */; };
 		9C6FC66F2B167A7C04BC33F4 /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A7C57ACD09B24C3F2EC238B5 /* CoreGraphics.framework */; };
 		A803E492E789017EFD4D2590 /* assets in Resources */ = {isa = PBXBuildFile; fileRef = B62BC3012357D04BFD6A9DF7 /* assets */; };
 		AE054C7456CE7E64E7DB79EC /* main.mm in Sources */ = {isa = PBXBuildFile; fileRef = 94E8CA94E8B2A7BC7F1B7394 /* main.mm */; };
@@ -26,11 +27,13 @@
 		23E1972A7910727CF7C54324 /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
 		3232A2624228243131761D2F /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		3F38D13C8F6223C6A627F2F0 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
+		463B2765A746C331CCB9688D /* sync.rs */ = {isa = PBXFileReference; path = sync.rs; sourceTree = "<group>"; };
 		4816E30EEC76CB798D244C2D /* bootstrap.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = bootstrap.html; sourceTree = "<group>"; };
 		5D9B1A5350D90F61AD5C52B0 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		74836CA5EB5832243D76DD9D /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
 		7A2559D9FA42404B609B8ACF /* WebKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WebKit.framework; path = System/Library/Frameworks/WebKit.framework; sourceTree = SDKROOT; };
 		7A35E7E59E2418667E34196C /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
+		8AB56B8219EE809C5C3185CC /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
 		93E9AA452B776C93B2E558EB /* desktop_iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = desktop_iOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		94E8CA94E8B2A7BC7F1B7394 /* main.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = main.mm; sourceTree = "<group>"; };
 		952D4EC409C47B42CE34C260 /* desktop_iOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = desktop_iOS.entitlements; sourceTree = "<group>"; };
@@ -41,6 +44,9 @@
 		C1884EE328BA41280C18F605 /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
 		D7D3B6FC6F4841F28339C9C0 /* main.rs */ = {isa = PBXFileReference; path = main.rs; sourceTree = "<group>"; };
 		DBCA5DEB8224D47F9498CB69 /* lib.rs */ = {isa = PBXFileReference; path = lib.rs; sourceTree = "<group>"; };
+		DBEF9747ADB146D09C4CF529 /* r2.rs */ = {isa = PBXFileReference; path = r2.rs; sourceTree = "<group>"; };
+		E1967CB2E4D428AE15529735 /* secrets.rs */ = {isa = PBXFileReference; path = secrets.rs; sourceTree = "<group>"; };
+		E7B6122F291FD9B518CECB2F /* setup.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = setup.html; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -65,6 +71,7 @@
 		1932459B89178EA383CD968A /* Externals */ = {
 			isa = PBXGroup;
 			children = (
+				563BC18EF66D8E40FF914BD2 /* arm64 */,
 			);
 			path = Externals;
 			sourceTree = "<group>";
@@ -92,6 +99,14 @@
 			path = Sources;
 			sourceTree = "<group>";
 		};
+		563BC18EF66D8E40FF914BD2 /* arm64 */ = {
+			isa = PBXGroup;
+			children = (
+				C2C112D649F6188374EBFBC1 /* debug */,
+			);
+			path = arm64;
+			sourceTree = "<group>";
+		};
 		609601DF1C93CF5931ED567F /* bindings */ = {
 			isa = PBXGroup;
 			children = (
@@ -115,9 +130,21 @@
 				4816E30EEC76CB798D244C2D /* bootstrap.html */,
 				DBCA5DEB8224D47F9498CB69 /* lib.rs */,
 				D7D3B6FC6F4841F28339C9C0 /* main.rs */,
+				DBEF9747ADB146D09C4CF529 /* r2.rs */,
+				E1967CB2E4D428AE15529735 /* secrets.rs */,
+				E7B6122F291FD9B518CECB2F /* setup.html */,
+				463B2765A746C331CCB9688D /* sync.rs */,
 			);
 			name = src;
 			path = ../../src;
+			sourceTree = "<group>";
+		};
+		C2C112D649F6188374EBFBC1 /* debug */ = {
+			isa = PBXGroup;
+			children = (
+				8AB56B8219EE809C5C3185CC /* libapp.a */,
+			);
+			path = debug;
 			sourceTree = "<group>";
 		};
 		C422CF061E3084F9C77E371F /* Products */ = {
@@ -150,6 +177,13 @@
 				609601DF1C93CF5931ED567F /* bindings */,
 			);
 			path = desktop;
+			sourceTree = "<group>";
+		};
+		"TEMP_7D60CF6C-BB37-4872-8535-5B1B2BCBA4AC" /* x86_64 */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = x86_64;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -213,6 +247,7 @@
 				4EB31719E5BA4F1D7D05E3F5 /* Assets.xcassets in Resources */,
 				453463D8A33F2C1835E8E179 /* LaunchScreen.storyboard in Resources */,
 				A803E492E789017EFD4D2590 /* assets in Resources */,
+				9615A2C9DB979608A93CF72A /* libapp.a in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -382,7 +417,9 @@
 				);
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = desktop_iOS/desktop_iOS.entitlements;
-				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_IDENTITY = "Apple Distribution";
+				CODE_SIGN_STYLE = Manual;
+				DEVELOPMENT_TEAM = "2T5DG4GZBN";
 				ENABLE_BITCODE = NO;
 				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
 				FRAMEWORK_SEARCH_PATHS = (
@@ -398,6 +435,7 @@
 				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				PRODUCT_BUNDLE_IDENTIFIER = ai.ax.watch-transcriber;
 				PRODUCT_NAME = "EchoWall";
+				PROVISIONING_PROFILE_SPECIFIER = "EchoWall App Store";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VALID_ARCHS = arm64;
@@ -432,6 +470,7 @@
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VALID_ARCHS = arm64;
+				DEVELOPMENT_TEAM = "2T5DG4GZBN";
 			};
 			name = debug;
 		};
