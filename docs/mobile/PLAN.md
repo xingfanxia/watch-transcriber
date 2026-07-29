@@ -283,3 +283,34 @@ judging a redeploy, and confirm the fix behavior changed.
 Not covered (deliberate): mid-flight token-expiry (401 after a valid save)
 only exercised at the classify() unit level — fabricating it would mean
 revoking the live test token; UI path exists (pill → 重新配置 → /setup).
+
+### MOBILE-4 (2026-07-29, DONE minus one 1-minute web step — CI 3/3 green)
+
+Distribution chain, API-first as planned: bundle id `ai.ax.watch-transcriber`
+registered (`ZD9JAFU449`), **Apple Distribution cert created via ASC API**
+(`R9L48TR57V` — resolves open unknown #4: only Developer ID is
+Account-Holder-gated), "EchoWall App Store" profile (`DZMX2B7NBZ`), all saved
+to ~/creds/apple with the p12 (WWDR **G3** chain, not the Developer ID G2).
+Android upload keystore → ~/creds/android + gradle signingConfig
+(keystore.properties local / env vars CI) + release cleartext fix + proguard
+keeps for the Keyring JNI class. release.yml now runs three lanes; run
+30436276848 = macos + ios + android ALL GREEN (dmg 10.9MB signed+notarized,
+App Store ipa 5.5MB, signed universal APK 25.8MB). Signed release APK
+verified on the emulator (installs, boots, serves — cleartext fix proven in
+the real release build).
+
+**The one human step:** the public ASC API cannot create app *records*
+(`POST /v1/apps` → 403 "does not allow CREATE" — not role-gated, just
+unsupported). Until AX creates the app in App Store Connect (New App → iOS →
+name "回音壁 EchoWall" → bundle id ai.ax.watch-transcriber → any SKU), the
+CI TestFlight step detects the missing record via `altool --list-apps` and
+skips with a warning; once the record exists the same lane uploads for real.
+
+**Failure worth remembering:** first CI run's ios lane died on
+`CpResource .../Externals/arm64/debug/libapp.a` — my `xcodegen generate` ran
+while local dev artifacts existed, so the bare `- path: Externals` sources
+entry captured libapp.a into the RESOURCES phase: fresh-checkout CI lacked
+the file (hard fail) and local ipas silently shipped a 400MB debug archive
+(109MB ipa → 5.6MB after `buildPhase: none`). With the full
+ExportOptions.plist committed, `tauri ios build --export-method
+app-store-connect` now works end-to-end — no xcodebuild fallback needed.
