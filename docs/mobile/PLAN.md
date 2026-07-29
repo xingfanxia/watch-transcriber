@@ -53,7 +53,19 @@ sandbox → manifest-driven R2 audio streaming with Range + LRU cache (cap
   60s on Wi-Fi; airplane mode → notes + pinned audio fully usable; tokens
   survive app restart; `git ls-files` leak scan still clean.
 
-## MOBILE-3: Mobile UX adaptation (same template, responsive)
+## MOBILE-3: Dedicated mobile layout (redesign, not retrofit)
+
+**AX direction (2026-07-28): mobile gets its own purpose-designed layout** —
+not a squeezed desktop retrofit. Same data payload, tokens, and render logic;
+the layout tier is designed for portrait touch from scratch. Process: 2-3
+divergent layout mockups rendered at phone viewport with demo data →
+`[TASTE FORK]` for AX to pick → implement the winner. Also add a `<meta
+viewport>` (mobile WebKit currently renders at ~980px virtual width).
+
+**Light/dark switch (AX, 2026-07-28): manual theme toggle on BOTH desktop and
+mobile** — one implementation in the shared template: toggle control +
+`data-theme` attribute override + localStorage persistence; system preference
+remains the default until the user flips it.
 
 Design source of truth: the graphite token set already in
 `viewer_template.html` (`--bg:#1a1a1a`, accent `#6cb0f5`, speaker palette,
@@ -129,4 +141,43 @@ design system) · responsive/a11y 8/10 · unresolved decisions: 0 critical,
 
 ## Retro
 
-(appended per phase)
+### MOBILE-1 (2026-07-28, in progress)
+
+**iOS: PASS.** `tauri ios init` + dev build worked with zero project changes
+(scaffold already had `mobile_entry_point`). On iPhone 17 Pro simulator:
+bootstrap page rendered → demo data injected into sandbox
+(`$HOME/projects/side-projects/watch-transcriber/data` — HOME maps to the app
+container) → live-sync auto-entered the viewer (sidebar, categories, speaker
+colors, day groups all working). **Serving decision: axum loopback works
+unchanged on iOS** — `GET /index.html` 200, `Range: bytes=0-99` → **206**, so
+audio seeking holds; no asset-protocol migration needed. Viewer renders the
+desktop 3-pane layout crammed (expected — MOBILE-3), and followed the
+simulator's light appearance (template has a light fallback; decide dark-first
+vs follow-system in MOBILE-3).
+
+**Android: PASS after one patch.** `data_dir()`'s `$HOME` fallback would panic
+(no HOME in Android app processes) — fixed with a `#[cfg(mobile)]` block in
+setup that resolves `app.path().app_data_dir()` and routes it through the
+existing `WATCH_TRANSCRIBER_DATA` env check. Verified on the mio_api36_pixel8
+emulator: viewer fully renders (narrow viewport stacks the desktop panes
+vertically — usable but MOBILE-3 replaces it), `Range: bytes=0-99` → 206.
+Android facts: `app_data_dir()` = the **package root** `/data/data/<pkg>`
+(not `files/`); package name is `ai.ax.watch_transcriber` (dashes →
+underscores); demo-data injection = `tar | adb shell run-as <pkg> tar -x`.
+
+**⚠️ Release landmine:** `gen/android/app/build.gradle.kts` sets manifest
+placeholder `usesCleartextTraffic` **false for release** (true only in debug)
+— a release APK will refuse the loopback HTTP URL and white-screen. MOBILE-4
+must flip it (or ship a network-security-config allowing 127.0.0.1 only).
+
+**Emulator quirks:** this AVD needs `-gpu swiftshader_indirect` (hardware GPU
+run showed chromium "tile memory limits exceeded" and a pure-white webview);
+default snapshot restore can resurface another project's session — cold-boot
+and reinstall before judging anything. Tauri injects its init scripts twice on
+Android ("Cannot redefine property" console errors) — benign for the viewer,
+keep an eye on it.
+
+**Sim quirks:** `tauri ios dev` does NOT boot the target simulator (fails
+`simctl install` with SimError 405 on a Shutdown device) — boot it first.
+Piping tauri dev output through `tail` buffers everything invisibly — always
+redirect straight to a log file.

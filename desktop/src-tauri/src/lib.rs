@@ -298,6 +298,17 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
+            // Mobile has no repo to walk up to and often no $HOME — resolve the
+            // platform app-data dir and route it through the existing env check.
+            #[cfg(mobile)]
+            {
+                use tauri::Manager;
+                if std::env::var("WATCH_TRANSCRIBER_DATA").is_err() {
+                    if let Ok(d) = app.path().app_data_dir() {
+                        std::env::set_var("WATCH_TRANSCRIBER_DATA", d.join("data"));
+                    }
+                }
+            }
             let dir = data_dir();
             let ready = dir.join("index.html").exists();
 
