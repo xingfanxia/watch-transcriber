@@ -317,8 +317,14 @@ distribution rows; project memory synced. spike/mobile-init merged to main
 (38b8666), tag v0.2.0 → release run 30437407029 all-green: Release carries
 `EchoWall_0.2.0_universal.dmg` (signed+notarized) + `EchoWall_0.2.0_universal.apk`
 (upload-keystore signed); App Store ipa on the run as a workflow artifact.
-Leak scan clean throughout. Only open item: the 1-minute ASC app-record web
-step above, after which the ios lane uploads to TestFlight by itself.
+Leak scan clean throughout.
+
+**TestFlight closed out (2026-07-29):** AX created the app record (web, ~1
+min) → 0.2.0 ipa uploaded via altool (`UPLOAD SUCCEEDED`), processed to
+`VALID`, internal group "Internal" created via API with
+`hasAccessToAllBuilds` (future CI uploads land in it automatically) + AX
+added as tester. Install path: TestFlight app on the phone, signed in with
+the dev Apple ID.
 
 **Failure worth remembering:** first CI run's ios lane died on
 `CpResource .../Externals/arm64/debug/libapp.a` — my `xcodegen generate` ran
