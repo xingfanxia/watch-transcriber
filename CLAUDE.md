@@ -81,12 +81,12 @@ first) / `npm run tauri android dev`. Landmines, all learned the hard way
   tauri's own export step writes one without it and fails.
 - `tauri android dev` redeploys can leave the OLD process running on the old
   port — `adb shell pidof` + `am force-stop` before judging a change.
-- **Personal seeded build** (owner convenience): `ECHOWALL_SEED_*` vars baked
-  at compile time auto-plant tokens into the keychain on first run. They must
-  reach cargo via a REPO-ROOT `.cargo/config.toml` `[env]` section
-  (gitignored) — shell env dies in xcodebuild script phases and the
-  xcode-script RPCs the parent CLI whose cwd is `desktop/`. Always verify
-  with `strings` on the app binary before uploading; delete the config after.
+- **Provision credentials at runtime** through the existing first-run setup
+  screen (`desktop/src-tauri/src/setup.html`) and secure-store implementation
+  (`desktop/src-tauri/src/secrets.rs`, Keychain/Keystore). Do not supply real
+  API keys or owner tokens through compile arguments, `ECHOWALL_SEED_*`, or
+  `.cargo/config.toml`; gitignored build inputs can still embed secrets in
+  distributable binaries. Never print extracted binary secrets as verification.
   Version bumps for ad-hoc uploads go in `tauri.conf.json` (tauri rewrites
   the Info.plist from it every build).
 
