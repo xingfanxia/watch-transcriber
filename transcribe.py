@@ -867,7 +867,10 @@ def _gemini_transcribe(client, audio_path: Path) -> str:
     finally:
         cleanup()
         if pyannote_pool is not None:
-            pyannote_pool.shutdown(wait=False)
+            # Wait even when transcription failed: a diarization thread left
+            # running overlaps the next recording's, and two concurrent Senko
+            # runs abort the process (numba's workqueue layer isn't thread-safe).
+            pyannote_pool.shutdown(wait=True)
 
 
 # ---------------------------------------------------------------------------
@@ -988,7 +991,10 @@ def _openai_transcribe(audio_path: Path) -> str:
     finally:
         cleanup()
         if pyannote_pool is not None:
-            pyannote_pool.shutdown(wait=False)
+            # Wait even when transcription failed: a diarization thread left
+            # running overlaps the next recording's, and two concurrent Senko
+            # runs abort the process (numba's workqueue layer isn't thread-safe).
+            pyannote_pool.shutdown(wait=True)
 
 
 def _lark_transcribe(audio_path: Path) -> str:
