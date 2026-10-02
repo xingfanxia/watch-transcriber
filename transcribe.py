@@ -472,11 +472,27 @@ def _pyannote_diarize(audio_path: Path):
     return _pyannote_diarize_impl(audio_path)
 
 
+def _disable_senko_stdio_swap() -> None:
+    """Stop Senko from swapping the process-wide sys.stdout/sys.stderr.
+
+    Senko hides its own chatter by replacing sys.stdout/sys.stderr with devnull
+    files and closing them afterwards. Diarization runs in a background thread
+    here, so main-thread output during that window is lost, and a write that
+    lands as the devnull file is closed fails with "I/O operation on closed
+    file". google-genai logs a warning on every generate_content call, so this
+    failed whole recordings intermittently. A no-op keeps stdio untouched.
+    """
+    import contextlib
+    import senko.diarizer
+    senko.diarizer.suppress_stdout_stderr = contextlib.nullcontext
+
+
 def _senko_diarize(audio_path: Path):
     """Senko diarization via CoreML. Senko needs 16kHz mono 16-bit WAV input,
     so we transcode via ffmpeg first. ~50x faster than pyannote/MPS on Apple Silicon.
     Uses `raw_segments` (sub-second granular, avoids over-merging rapid Q+A)."""
     import senko
+    _disable_senko_stdio_swap()
 
     tmp_wav = Path(tempfile.mktemp(prefix="senko_", suffix=".wav"))
     try:
