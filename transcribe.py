@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """watch-transcriber: Voice Memos → Volcano TOS → 妙记 STT → deliveries.
 
-Monitors Apple Voice Memos recordings directory for new .m4a files,
+Monitors Apple Voice Memos recordings directory for new recordings (.m4a,
+or .qta on newer iPhones),
 uploads each recording to Volcano TOS for server-side transcription and
 diarization by 妙记, then uses Gemini to summarize the returned text before
 delivering structured notes to configurable targets.
@@ -51,6 +52,8 @@ for fallback in [
 
 # Voice Memos recordings directory
 VOICE_MEMOS_DIR = Path.home() / "Library/Group Containers/group.com.apple.VoiceMemos.shared/Recordings"
+# Voice Memos saves .m4a; newer iPhones save QuickTime Audio (.qta) instead.
+RECORDING_SUFFIXES = (".m4a", ".qta")
 
 # State file to track processed recordings
 STATE_DIR = SCRIPT_DIR / "state"
@@ -103,6 +106,10 @@ def save_state(processed: set[str]):
     STATE_FILE.write_text(json.dumps(sorted(processed), indent=2))
 
 
+def is_recording(path: Path) -> bool:
+    return path.suffix.lower() in RECORDING_SUFFIXES
+
+
 def find_new_recordings(processed: set[str]) -> list[Path]:
     if not VOICE_MEMOS_DIR.exists():
         print(f"Voice Memos directory not found: {VOICE_MEMOS_DIR}")
@@ -110,14 +117,14 @@ def find_new_recordings(processed: set[str]) -> list[Path]:
 
     new_files = []
     for f in VOICE_MEMOS_DIR.iterdir():
-        if f.suffix == ".m4a" and f.name not in processed:
+        if is_recording(f) and f.name not in processed:
             new_files.append(f)
 
     return sorted(new_files, key=lambda p: p.stat().st_mtime)
 
 
 def find_recordings_by_date(date_str: str) -> list[Path]:
-    """Find all .m4a files for a given date (YYYY-MM-DD or YYYYMMDD).
+    """Find all recordings for a given date (YYYY-MM-DD or YYYYMMDD).
 
     Matches by Voice Memos filename prefix, e.g. "20260513 184600 watch.m4a".
     Ignores the processed-state set — caller decides whether to skip duplicates.
@@ -129,7 +136,7 @@ def find_recordings_by_date(date_str: str) -> list[Path]:
         return []
     matches = [
         f for f in VOICE_MEMOS_DIR.iterdir()
-        if f.suffix == ".m4a" and f.name.startswith(yyyymmdd)
+        if is_recording(f) and f.name.startswith(yyyymmdd)
     ]
     return sorted(matches, key=lambda p: p.stat().st_mtime)
 
@@ -1404,6 +1411,24 @@ def format_note(
     return note
 
 
+def extract_qta_audio(src: Path, dest_dir: Path) -> Path:
+    """Copy the AAC track out of a .qta recording into a plain .m4a.
+
+    Newer iPhones save Voice Memos as QuickTime Audio (.qta): a stereo AAC
+    track first, plus an Apple APAC spatial-audio track that ffmpeg, Gemini
+    and browsers can't decode. Stream-copy the first audio track (no
+    re-encode) to an .m4a with the same stem, so every downstream step and
+    delivery sees an ordinary recording.
+    """
+    dest = dest_dir / f"{src.stem}.m4a"
+    subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", str(src),
+         "-map", "0:a:0", "-c", "copy", "-movflags", "+faststart", str(dest)],
+        check=True,
+    )
+    return dest
+
+
 def process_recording(audio_path: Path, dry_run: bool = False) -> bool:
     """Process a single recording: transcribe + summarize → deliver."""
     print(f"\n{'='*60}")
@@ -1430,6 +1455,13 @@ def process_recording(audio_path: Path, dry_run: bool = False) -> bool:
         print(f"  [DRY-RUN] would deliver to: {targets}")
         return False
 
+    if audio_path.suffix.lower() == ".qta":
+        with tempfile.TemporaryDirectory(prefix="watch_qta_") as tmp:
+            return _transcribe_and_deliver(extract_qta_audio(audio_path, Path(tmp)))
+    return _transcribe_and_deliver(audio_path)
+
+
+def _transcribe_and_deliver(audio_path: Path) -> bool:
     # Two stages: provider STT (妙记 by default), then Gemini text summarization.
     result = transcribe_and_summarize(audio_path)
     if not result or not result.get("transcript"):
@@ -1506,9 +1538,9 @@ def run_doctor() -> int:
     print("\n== Filesystem ==")
     if VOICE_MEMOS_DIR.exists():
         try:
-            m4a_count = sum(1 for f in VOICE_MEMOS_DIR.iterdir() if f.suffix == ".m4a")
+            rec_count = sum(1 for f in VOICE_MEMOS_DIR.iterdir() if is_recording(f))
             check("Voice Memos directory readable", True,
-                  note=f"{m4a_count} .m4a files at {VOICE_MEMOS_DIR}")
+                  note=f"{rec_count} recordings at {VOICE_MEMOS_DIR}")
         except PermissionError:
             check("Voice Memos directory readable", False,
                   note="permission denied — grant Full Disk Access to your terminal")
@@ -1611,7 +1643,7 @@ def main():
     if args.reprocess_all:
         # Chronological by filename prefix ("YYYYMMDD HHMMSS..."), ignores state.
         recordings = sorted(
-            (f for f in VOICE_MEMOS_DIR.iterdir() if f.suffix == ".m4a"),
+            (f for f in VOICE_MEMOS_DIR.iterdir() if is_recording(f)),
             key=lambda p: p.name,
         ) if VOICE_MEMOS_DIR.exists() else []
         print(f"Reprocess-all mode: found {len(recordings)} recording(s)")

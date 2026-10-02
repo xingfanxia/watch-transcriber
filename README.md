@@ -392,7 +392,7 @@ Then add `your_target` to `DELIVERY_TARGETS` in `.env`.
 ## How it works
 
 1. **Record** on Apple Watch using Voice Memos (or any device)
-2. **iCloud syncs** the `.m4a` to `~/Library/Group Containers/group.com.apple.VoiceMemos.shared/Recordings/`
+2. **iCloud syncs** the `.m4a` (or `.qta`, which newer iPhones record; the watcher losslessly copies out its standard AAC track) to `~/Library/Group Containers/group.com.apple.VoiceMemos.shared/Recordings/`
 3. **launchd detects** the new file via `WatchPaths`
 4. **妙记 (Volcano Lark Minutes)** transcribes with server-side speaker diarization (or the Gemini/OpenAI fallback), then Gemini summarizes the transcript and names it
 5. **Delivery layer** sends the structured note — titled `YYYY-MM-DD HH:MM <AI topic>` so name-sorted lists order chronologically — to your configured targets

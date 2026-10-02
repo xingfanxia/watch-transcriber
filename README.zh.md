@@ -362,7 +362,7 @@ def deliver(note: dict) -> bool:
 ## 工作原理
 
 1. 在 Apple Watch 上用**语音备忘录**录音（或任何设备）
-2. **iCloud 同步** `.m4a` 到 `~/Library/Group Containers/group.com.apple.VoiceMemos.shared/Recordings/`
+2. **iCloud 同步** `.m4a`（较新的 iPhone 会录成 `.qta`，watcher 会无损提取其中的标准 AAC 音轨）到 `~/Library/Group Containers/group.com.apple.VoiceMemos.shared/Recordings/`
 3. **launchd 检测到**新文件（通过 `WatchPaths`）
 4. **妙记（火山 Lark Minutes）** 执行语音识别 + 服务端说话人分离（或 Gemini/OpenAI 兜底），随后 Gemini 对文稿做摘要并生成标题
 5. **投递层**将结构化笔记发送到你配置的目标——标题格式 `YYYY-MM-DD HH:MM 内容标题`，按名称排序即时间序
