@@ -64,6 +64,32 @@ GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
 # brief accidental taps; transcribing them wastes API quota.
 MIN_DURATION_SECONDS = int(os.environ.get("MIN_DURATION_SECONDS", "60"))
 
+# Languages for the summary and key points, in display order, as comma-separated
+# ISO 639-1 codes. Default "en,zh" keeps the original bilingual notes; "en" is
+# English only; "en,es" is English + Spanish. Transcripts always stay in the
+# spoken language. Each code becomes summary_<code> / key_points_<code>.
+_LANGUAGE_CODE = re.compile(r"^[a-z]{2,3}$")
+
+
+def parse_summary_languages(value: str) -> list[str]:
+    """"en, ES ,zh" -> ["en", "es", "zh"]; invalid codes dropped; empty -> default."""
+    codes = [c.strip().lower() for c in value.split(",")]
+    codes = [c for c in dict.fromkeys(codes) if _LANGUAGE_CODE.match(c)]
+    return codes or ["en", "zh"]
+
+
+SUMMARY_LANGUAGES = parse_summary_languages(os.environ.get("SUMMARY_LANGUAGES", "en,zh"))
+_LANGUAGE_NAMES = {
+    "en": "English", "zh": "Chinese (中文)", "es": "Spanish", "fr": "French",
+    "de": "German", "it": "Italian", "pt": "Portuguese", "ja": "Japanese",
+    "ko": "Korean", "ru": "Russian", "ro": "Romanian", "nl": "Dutch",
+    "ar": "Arabic", "hi": "Hindi",
+}
+
+
+def language_name(code: str) -> str:
+    return _LANGUAGE_NAMES.get(code, f"the language with ISO 639-1 code '{code}'")
+
 # Provider selection:
 #   "lark"   — 妙记 (Volcano Lark Minutes ASR); best diarization, single-call,
 #              server-side speaker detection. Needs VOLC_API_KEY + VOLC_TOS_*. See volc_lark.py.
@@ -226,6 +252,17 @@ _META_LINE_RE = re.compile(
     r"^\s*(好的|以下是|这是.{0,15}(转录|音频)|（注[：:]|\(Note[：:]|Here.{0,5}(is|'s).{0,20}(transcription|transcript)|\[?.*?as an? AI)",
     re.IGNORECASE,
 )
+
+
+def _drop_meta_lines(transcript: str) -> str:
+    """Drop Gemini preamble / meta-commentary lines (e.g. "以下是为您转录的音频文本：").
+
+    Speaker-turn lines are always kept, even if they happen to match
+    _META_LINE_RE (e.g. "... SPEAKER_0: I work as an AI engineer").
+    """
+    kept = [ln for ln in transcript.splitlines()
+            if _TURN_RE.match(ln) or not _META_LINE_RE.match(ln)]
+    return "\n".join(kept).strip()
 
 
 def _offset_timestamps(transcript: str, offset_sec: float) -> str:
@@ -817,7 +854,9 @@ def _gemini_transcribe(client, audio_path: Path) -> str:
     try:
         if len(chunks) == 1:
             print(f"  Transcribing with {GEMINI_MODEL} (single chunk, {duration:.0f}s)...")
-            text = _gemini_transcribe_one(client, chunks[0][0])
+            # Multi-chunk output is cleaned in _offset_and_filter_timestamps;
+            # single-chunk output needs the same preamble filtering.
+            text = _drop_meta_lines(_gemini_transcribe_one(client, chunks[0][0]))
         else:
             n = len(chunks)
             workers = min(CHUNK_PARALLELISM, n)
@@ -1052,29 +1091,34 @@ TRANSCRIBE_PROMPT = """请将这段音频转录成文字，并标注说话人。
 [00:00:45 - 00:01:05] SPEAKER_1: Hello, my name is Zhang San.
 """
 
-SUMMARIZE_PROMPT = f"""You are analyzing a diarized transcript. Produce a JSON object with these fields:
+def build_summarize_prompt(languages: list[str]) -> str:
+    """Summary prompt asking for summary_<code> / key_points_<code> per language."""
+    names = [language_name(c) for c in languages]
+    fields = [f"- summary_{c}: 2-3 sentence summary in {n}" for c, n in zip(languages, names)]
+    fields += [f"- key_points_{c}: 3-7 key points in {n}" for c, n in zip(languages, names)]
+    example = [f'  "summary_{c}": "...",' for c in languages]
+    example += [f'  "key_points_{c}": ["...", "..."],' for c in languages]
+    nl = "\n"
+    return f"""You are analyzing a diarized transcript. Produce a JSON object with these fields:
 
 - title: a short descriptive title naming what the recording is actually about (≤12字 if Chinese, ≤8 words if English). Use the transcript's dominant language. No dates, no quotes, no generic labels like "Voice Note"/"录音"/"对话记录"
 - category: the recording's dominant topic/scene — EXACTLY one of: {" / ".join(CATEGORIES)}
-- summary_en: 2-3 sentence summary in English
-- summary_zh: 2-3 sentence summary in Chinese (中文摘要)
-- key_points_en: 3-7 key points in English
-- key_points_zh: 3-7 key points in Chinese (中文要点)
-- action_items: todos or follow-ups mentioned (bilingual list; empty list if none)
+{nl.join(fields)}
+- action_items: todos or follow-ups mentioned (in {" and ".join(names)}; empty list if none)
 
 Return ONLY valid JSON, no markdown fences:
 {{
   "title": "...",
   "category": "...",
-  "summary_en": "...",
-  "summary_zh": "...",
-  "key_points_en": ["...", "..."],
-  "key_points_zh": ["...", "..."],
+{nl.join(example)}
   "action_items": ["...", "..."]
 }}
 
 Transcript:
 """
+
+
+SUMMARIZE_PROMPT = build_summarize_prompt(SUMMARY_LANGUAGES)
 
 TITLE_ONLY_PROMPT = """为下面的对话转写起一个标题:中文≤12字(或英文≤8词,跟随转写的主导语言),\
 点出内容主题。只返回标题文本本身 —— 不要引号、日期、标点装饰或任何其他文字。
@@ -1249,6 +1293,16 @@ def _clean_ai_title(raw) -> str:
     return t.strip()
 
 
+def _summary_for(result: dict, code: str) -> str:
+    text = result.get(f"summary_{code}", "")
+    return text or (result.get("summary", "") if code == "en" else "")
+
+
+def _key_points_for(result: dict, code: str) -> list:
+    points = result.get(f"key_points_{code}", [])
+    return points or (result.get("key_points", []) if code == "en" else [])
+
+
 def format_note(
     audio_path: Path,
     result: dict,
@@ -1292,10 +1346,8 @@ def format_note(
     ai_title = _clean_ai_title(result.get("title", ""))
     title = f"{ts_label} {ai_title}" if ai_title else f"{ts_label} Voice Note"
 
-    summary_en = result.get("summary_en", result.get("summary", ""))
-    summary_zh = result.get("summary_zh", "")
-    key_points_en = result.get("key_points_en", result.get("key_points", []))
-    key_points_zh = result.get("key_points_zh", [])
+    summaries = [s for s in (_summary_for(result, c) for c in SUMMARY_LANGUAGES) if s]
+    key_point_blocks = [b for b in (_key_points_for(result, c) for c in SUMMARY_LANGUAGES) if b]
     action_items = result.get("action_items", [])
     transcript = result.get("transcript", "")
 
@@ -1309,23 +1361,17 @@ def format_note(
         "",
     ]
 
-    if summary_en or summary_zh:
+    if summaries:
         lines += ["## Summary"]
-        if summary_en:
-            lines += ["", summary_en]
-        if summary_zh:
-            lines += ["", summary_zh]
+        for summary in summaries:
+            lines += ["", summary]
         lines.append("")
 
-    if key_points_en or key_points_zh:
+    if key_point_blocks:
         lines += ["## Key Points"]
-        if key_points_en:
+        for block in key_point_blocks:
             lines.append("")
-            for point in key_points_en:
-                lines.append(f"- {point}")
-        if key_points_zh:
-            lines.append("")
-            for point in key_points_zh:
+            for point in block:
                 lines.append(f"- {point}")
         lines.append("")
 
@@ -1360,15 +1406,13 @@ def format_note(
         f"<b>Source:</b> {_esc(source)}<br>"
         f"<b>File:</b> {_esc(audio_path.name)}</p>",
     ]
-    if summary_en or summary_zh:
+    if summaries:
         html_parts.append("<h2>Summary</h2>")
-        if summary_en:
-            html_parts.append(f"<p>{_esc(summary_en)}</p>")
-        if summary_zh:
-            html_parts.append(f"<p>{_esc(summary_zh)}</p>")
-    if key_points_en or key_points_zh:
+        for summary in summaries:
+            html_parts.append(f"<p>{_esc(summary)}</p>")
+    if key_point_blocks:
         html_parts.append("<h2>Key Points</h2><ul>")
-        for point in list(key_points_en) + list(key_points_zh):
+        for point in (p for block in key_point_blocks for p in block):
             html_parts.append(f"<li>{_esc(point)}</li>")
         html_parts.append("</ul>")
     if action_items:
@@ -1385,7 +1429,7 @@ def format_note(
     note = {
         "title": title,
         "transcript": transcript.strip(),
-        "summary": f"{summary_en}\n\n{summary_zh}".strip(),
+        "summary": "\n\n".join(summaries),
         "todos": action_items,
         "category": clean_category(result.get("category")),
         "audio_path": str(audio_path),
@@ -1437,13 +1481,11 @@ def process_recording(audio_path: Path, dry_run: bool = False) -> bool:
         return False
 
     transcript = result.get("transcript", "")
-    summary_en = result.get("summary_en", result.get("summary", ""))
-    summary_zh = result.get("summary_zh", "")
     print(f"  Transcript: {len(transcript)} chars")
-    if summary_en:
-        print(f"  Summary (EN): {summary_en[:100]}...")
-    if summary_zh:
-        print(f"  Summary (ZH): {summary_zh[:100]}...")
+    for code in SUMMARY_LANGUAGES:
+        summary = _summary_for(result, code)
+        if summary:
+            print(f"  Summary ({code.upper()}): {summary[:100]}...")
 
     # Format note
     note = format_note(audio_path, result)
@@ -1485,6 +1527,8 @@ def run_doctor() -> int:
     # GEMINI is always needed (summary step runs on Gemini regardless of provider).
     check("GEMINI_API_KEY set", bool(os.environ.get("GEMINI_API_KEY")))
     check("GEMINI_MODEL", True, note=GEMINI_MODEL)
+    check("SUMMARY_LANGUAGES", True,
+          note=", ".join(f"{c} ({language_name(c)})" for c in SUMMARY_LANGUAGES))
     if STT_PROVIDER in ("lark", "miaoji"):
         tos_keys = ["VOLC_API_KEY", "VOLC_TOS_ACCESS_KEY", "VOLC_TOS_SECRET_KEY",
                     "VOLC_TOS_BUCKET", "VOLC_TOS_REGION", "VOLC_TOS_ENDPOINT"]

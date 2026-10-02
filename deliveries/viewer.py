@@ -48,11 +48,19 @@ def _parse_note(md_path: Path) -> dict:
     paras = [p.strip() for p in re.split(r"\n\s*\n", sec.get("Summary", "")) if p.strip()]
     summary_zh = next((p for p in paras if _CJK.search(p)), "")
     summary_en = next((p for p in paras if not _CJK.search(p)), "")
+    # Non-Chinese SUMMARY_LANGUAGES (e.g. "en,es"): no CJK paragraph, so show
+    # the second-language paragraph in the slot Chinese normally takes.
+    if not summary_zh and len(paras) > 1:
+        summary_zh = paras[1]
 
-    bullets = [ln[2:].strip() for ln in sec.get("Key Points", "").split("\n")
-               if ln.startswith("- ")]
+    # format_note writes one blank-line-separated bullet block per language.
+    blocks = [[ln[2:].strip() for ln in blk.split("\n") if ln.startswith("- ")]
+              for blk in re.split(r"\n\s*\n", sec.get("Key Points", ""))]
+    blocks = [b for b in blocks if b]
+    bullets = [b for blk in blocks for b in blk]
     zh_bullets = [b for b in bullets if _CJK.search(b)]
-    key_points = zh_bullets or bullets
+    # Prefer Chinese as before; otherwise the last language block.
+    key_points = zh_bullets or (blocks[-1] if blocks else [])
 
     todos = [ln[6:].strip() for ln in sec.get("Action Items", "").split("\n")
              if ln.startswith("- [ ] ")]

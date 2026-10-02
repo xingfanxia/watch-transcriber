@@ -283,6 +283,10 @@ DELIVERY_TARGETS=file,apple_notes
 
 **`DELIVERY_TARGETS` 顺序敏感**:`manifest` 依赖 `local_archive`/`audio_archive` 已落盘的输出,`viewer`/`archive_git` 又消费 manifest —— 保持 `local_archive, audio_archive, manifest, viewer, archive_git, r2_backup` 的相对顺序。
 
+### 摘要语言
+
+笔记默认包含英文 + 中文的摘要和要点。在 `.env` 中把 `SUMMARY_LANGUAGES` 设为以逗号分隔的 ISO 639-1 语言代码（按显示顺序）即可更改：`en` 仅英文，`en,es` 为英文 + 西班牙文，以此类推。转写始终保持说话时的原语言。该设置作用于 Python watcher 的各投递目标和归档页面；EchoWall App 自己录制的录音仍使用内置的英文 + 中文摘要。
+
 ### 数据放哪(本 repo 是公开的 ⚠️)
 
 `data/`(笔记、转写、音频、manifest)在这里被 gitignore,绝不允许 commit 进本 repo。备份三条腿:

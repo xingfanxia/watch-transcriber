@@ -316,6 +316,10 @@ Available deliveries:
 
 **Order matters** within `DELIVERY_TARGETS`: `manifest` locates `local_archive`/`audio_archive` output on disk, and `viewer`/`archive_git` consume the manifest — keep `local_archive, audio_archive, manifest, viewer, archive_git, r2_backup` in that relative order.
 
+### Summary languages
+
+Notes carry an English + Chinese summary and key points by default. Set `SUMMARY_LANGUAGES` in `.env` to a comma-separated list of ISO 639-1 codes, in display order, to change that: `en` for English only, `en,es` for English + Spanish, and so on. Transcripts always stay in the spoken language. This applies to the Python watcher's deliveries and archive page; the EchoWall App's own recordings keep their built-in English + Chinese summary.
+
 ### Where the data lives (this repo is public ⚠️)
 
 `data/` (notes, transcripts, audio, manifest) is gitignored here and must never be committed to this repo. Backup legs:
